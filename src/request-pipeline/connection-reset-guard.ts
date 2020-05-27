@@ -11,6 +11,17 @@ connectionResetDomain.on('error', err => {
     if (err.code === 'ECONNRESET' || !os.win && err.code === 'EPIPE' || os.win && err.code === 'ECONNABORTED')
         return;
 
+    // There seems to be an error case where OpenSSL tries to read from a connection, and an SSL_ERROR_SYSCALL error (code 5)
+    // is returned. However, the error queue is empty (or node's error handling is wrong - I have no idea). However, I'm led
+    // to believe it's the result of an I/O error/protocol violation. The client expects to read  more data, but the remote
+    // server has closed the connection.
+    //
+    // I haven't confirmed this yet - or read enough of the OpenSSL docs to confirm that the error handling code is correct,
+    // but this will catch and ignore the error - which is actually a TLSSocket object.
+    if (err.domainEmitter && err.domainEmitter.constructor && err.domainEmitter.constructor.name === 'TLSSocket') {
+        return;
+    }
+
     connectionResetDomain.removeAllListeners('error');
     throw err;
 });
