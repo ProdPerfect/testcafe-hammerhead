@@ -30,7 +30,8 @@ import {
     isStyleElement,
     findDocument,
     isBodyElement,
-    isHtmlElement
+    isHtmlElement,
+    isTitleElement
 } from '../../utils/dom';
 import { isPrimitiveType } from '../../utils/types';
 import INTERNAL_ATTRS from '../../../processing/dom/internal-attributes';
@@ -60,8 +61,18 @@ import ElementEditingWatcher from '../event/element-editing-watcher';
 import ChildWindowSandbox from '../child-window';
 import settings from '../../settings';
 import DefaultTarget from '../child-window/default-target';
+import DocumentTitleStorage from './document/title-storage';
 
 const nativeFunctionToString = nativeMethods.Function.toString();
+const INSTRUCTION_VALUES    = (() => {
+    const values = [];
+    const keys   = nativeMethods.objectKeys(INSTRUCTION);
+
+    for (const key of keys)
+        values.push(INSTRUCTION[key]);
+
+    return values;
+})();
 
 const HTTP_PROTOCOL_RE = /^http/i;
 
@@ -108,7 +119,8 @@ export default class WindowSandbox extends SandboxBase {
         eventSandbox: EventSandbox,
         uploadSandbox: UploadSandbox,
         nodeMutation: NodeMutation,
-        private readonly _childWindowSandbox: ChildWindowSandbox) {
+        private readonly _childWindowSandbox: ChildWindowSandbox,
+        private readonly _documentTitleStorage: DocumentTitleStorage) {
         super();
 
         this.nodeSandbox           = nodeSandbox;
@@ -569,6 +581,8 @@ export default class WindowSandbox extends SandboxBase {
                     handler.get = function (getterTarget, name, receiver) {
                         if (name === IS_PROXY_OBJECT_INTERNAL_PROP_NAME)
                             return IS_PROXY_OBJECT_INTERNAL_PROP_VALUE;
+                        else if (INSTRUCTION_VALUES.indexOf(name) > -1)
+                            return window[name];
 
                         return storedGet.call(this, getterTarget, name, receiver);
                     };
@@ -1214,6 +1228,9 @@ export default class WindowSandbox extends SandboxBase {
 
         overrideDescriptor(window[nativeMethods.elementHTMLPropOwnerName].prototype, 'innerHTML', {
             getter: function () {
+                if (isTitleElement(this))
+                    return windowSandbox._documentTitleStorage.getTitleElementPropertyValue(this);
+
                 const innerHTML = nativeMethods.elementInnerHTMLGetter.call(this);
 
                 if (isScriptElement(this))
@@ -1224,6 +1241,12 @@ export default class WindowSandbox extends SandboxBase {
                 return cleanUpHtml(innerHTML);
             },
             setter: function (value) {
+                if (isTitleElement(this)) {
+                    windowSandbox._documentTitleStorage.setTitleElementPropertyValue(this, value);
+
+                    return;
+                }
+
                 const el         = this;
                 const isStyleEl  = isStyleElement(el);
                 const isScriptEl = isScriptElement(el);
@@ -1329,11 +1352,20 @@ export default class WindowSandbox extends SandboxBase {
 
         overrideDescriptor(window.HTMLElement.prototype, 'innerText', {
             getter: function () {
+                if (isTitleElement(this))
+                    return windowSandbox._documentTitleStorage.getTitleElementPropertyValue(this);
+
                 const textContent = nativeMethods.htmlElementInnerTextGetter.call(this);
 
                 return WindowSandbox._removeProcessingInstructions(textContent);
             },
             setter: function (value) {
+                if (isTitleElement(this)){
+                    windowSandbox._documentTitleStorage.setTitleElementPropertyValue(this, value);
+
+                    return;
+                }
+
                 const processedValue = WindowSandbox._processTextPropValue(this, value);
 
                 DOMMutationTracker.onChildrenChanged(this);
@@ -1372,11 +1404,20 @@ export default class WindowSandbox extends SandboxBase {
 
         overrideDescriptor(window.Node.prototype, 'textContent', {
             getter: function () {
+                if (isTitleElement(this))
+                    return windowSandbox._documentTitleStorage.getTitleElementPropertyValue(this);
+
                 const textContent = nativeMethods.nodeTextContentGetter.call(this);
 
                 return WindowSandbox._removeProcessingInstructions(textContent);
             },
             setter: function (value) {
+                if (isTitleElement(this)) {
+                    windowSandbox._documentTitleStorage.setTitleElementPropertyValue(this, value);
+
+                    return;
+                }
+
                 const processedValue = WindowSandbox._processTextPropValue(this, value);
 
                 DOMMutationTracker.onChildrenChanged(this);
@@ -1422,7 +1463,7 @@ export default class WindowSandbox extends SandboxBase {
             getter: function () {
                 const originNextSibling = nativeMethods.mutationRecordNextSiblingGetter.call(this);
 
-                return windowSandbox.shadowUI.getNextSibling(originNextSibling);
+                return windowSandbox.shadowUI.getMutationRecordNextSibling(originNextSibling);
             }
         });
 
@@ -1430,7 +1471,7 @@ export default class WindowSandbox extends SandboxBase {
             getter: function () {
                 const originPrevSibling = nativeMethods.mutationRecordPrevSiblingGetter.call(this);
 
-                return windowSandbox.shadowUI.getPrevSibling(originPrevSibling);
+                return windowSandbox.shadowUI.getMutationRecordPrevSibling(originPrevSibling);
             }
         });
 
@@ -1474,5 +1515,22 @@ export default class WindowSandbox extends SandboxBase {
                 }
             });
         }
+
+        overrideDescriptor(window.HTMLTitleElement.prototype, 'text', {
+            getter: function () {
+                if (isTitleElement(this))
+                    return windowSandbox._documentTitleStorage.getTitleElementPropertyValue(this);
+
+                return nativeMethods.titleElementTextGetter.call(this);
+
+            },
+            setter: function (value) {
+                if (isTitleElement(this))
+                    windowSandbox._documentTitleStorage.setTitleElementPropertyValue(this, value);
+
+                else
+                    nativeMethods.titleElementTextSetter.call(this, value);
+            }
+        });
     }
 }

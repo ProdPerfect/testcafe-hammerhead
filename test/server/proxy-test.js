@@ -641,8 +641,8 @@ describe('Proxy', () => {
                         });
                 }
 
-                session._getPayloadScript       = () => 'PayloadScript';
-                session._getIframePayloadScript = () => 'IframePayloadScript';
+                session.getPayloadScript       = async () => 'PayloadScript';
+                session.getIframePayloadScript = async () => 'IframePayloadScript';
 
                 return Promise.all([
                     testTaskScriptRequest('http://localhost:1836/task.js', 'PayloadScript'),
@@ -2870,8 +2870,8 @@ describe('Proxy', () => {
         });
 
         it('Should pass `forceProxySrcForImage` option in task script', () => {
-            session._getPayloadScript       = () => 'PayloadScript';
-            session._getIframePayloadScript = () => 'IframePayloadScript';
+            session.getPayloadScript       = () => 'PayloadScript';
+            session.getIframePayloadScript = () => 'IframePayloadScript';
 
             const rule = RequestFilterRule.ANY;
 
@@ -4090,6 +4090,31 @@ describe('Proxy', () => {
                                          'http://127.0.0.1:2000/error-emulation</a> ' +
                                          'because of an error.\nError: Emulation of error!');
                 });
+        });
+
+        it('Should not emit error after a destination response is ended', () => {
+            const nativeOnResponse = DestinationRequest.prototype._onResponse;
+            let hasPageError       = false;
+
+            DestinationRequest.prototype._onResponse = function (res) {
+                res.once('end', () => setTimeout(() => this._onError(new Error()), 50));
+
+                nativeOnResponse.apply(this, arguments);
+                DestinationRequest.prototype._onResponse = nativeOnResponse;
+            };
+
+            const options = {
+                url:     proxy.openSession('http://127.0.0.1:2000/', session),
+                headers: { accept: PAGE_ACCEPT_HEADER }
+            };
+
+            session.handlePageError = () => {
+                hasPageError = true;
+            };
+
+            return request(options)
+                .then(() => new Promise(resolve => setTimeout(resolve, 2000)))
+                .then(() => expect(hasPageError).to.be.false);
         });
     });
 });

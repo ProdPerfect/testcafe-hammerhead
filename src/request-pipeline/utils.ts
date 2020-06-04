@@ -15,6 +15,7 @@ import ConfigureResponseEventOptions from '../session/events/configure-response-
 import { toReadableStream } from '../utils/buffer';
 import { PassThrough } from 'stream';
 import { getText, MESSAGE } from '../messages';
+import logger from '../utils/logger';
 
 export function sendRequest (ctx: RequestPipelineContext) {
     return new Promise(resolve => {
@@ -40,15 +41,16 @@ export function sendRequest (ctx: RequestPipelineContext) {
         req.on('error', err => {
             // NOTE: Sometimes the underlying socket emits an error event. But if we have a response body,
             // we can still process such requests. (B234324)
-            if (ctx.isDestResBodyMalformed()) {
+            if (!ctx.isDestResReadableEnded)
                 error(ctx, getText(MESSAGE.destConnectionTerminated, ctx.dest.url, err.toString()));
-                ctx.goToNextStage = false;
-            }
 
             resolve();
         });
 
         req.on('fatalError', err => {
+            if (ctx.isFileProtocol)
+                logger.destination('File read error %s %o', ctx.requestId, err);
+
             error(ctx, err);
             resolve();
         });
@@ -58,8 +60,10 @@ export function sendRequest (ctx: RequestPipelineContext) {
             resolve();
         });
 
-        if (req instanceof FileRequest)
+        if (req instanceof FileRequest) {
+            logger.destination('Read file %s %s', ctx.requestId, ctx.reqOpts.url);
             req.init();
+        }
     });
 }
 

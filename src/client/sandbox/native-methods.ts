@@ -45,7 +45,7 @@ class NativeMethods {
     replaceChild: any;
     cloneNode: any;
     elementGetElementsByClassName: any;
-    elementGetElementsByTagName: any;
+    elementGetElementsByTagName: Function;
     elementQuerySelector: any;
     elementQuerySelectorAll: any;
     getAttribute: any;
@@ -224,6 +224,7 @@ class NativeMethods {
     htmlCollectionLengthGetter: any;
     nodeListLengthGetter: any;
     nodeParentNodeGetter: any;
+    nodeChildNodesGetter: any;
     elementChildElementCountGetter: any;
     inputFilesGetter: any;
     styleSheetHrefGetter: any;
@@ -295,6 +296,8 @@ class NativeMethods {
     messageEventDataGetter: any;
     htmlManifestGetter: any;
     htmlManifestSetter: any;
+    titleElementTextGetter: Function;
+    titleElementTextSetter: Function;
     responseStatusGetter: any;
     responseTypeGetter: any;
     responseUrlGetter: any;
@@ -731,6 +734,7 @@ class NativeMethods {
         const htmlElementInnerTextDescriptor = win.Object.getOwnPropertyDescriptor(win.HTMLElement.prototype, 'innerText');
         const scriptTextDescriptor           = win.Object.getOwnPropertyDescriptor(win.HTMLScriptElement.prototype, 'text');
         const anchorTextDescriptor           = win.Object.getOwnPropertyDescriptor(win.HTMLAnchorElement.prototype, 'text');
+        const titleElementTextDescriptor     = win.Object.getOwnPropertyDescriptor(win.HTMLTitleElement.prototype, 'text');
         const iframeSandboxDescriptor        = win.Object.getOwnPropertyDescriptor(win.HTMLIFrameElement.prototype, 'sandbox');
         const windowOriginDescriptor         = win.Object.getOwnPropertyDescriptor(win, 'origin');
 
@@ -806,6 +810,8 @@ class NativeMethods {
             this.scriptIntegritySetter = scriptIntegrityDescriptor.set;
             this.linkIntegritySetter   = linkIntegrityDescriptor.set;
         }
+
+        this.titleElementTextSetter = titleElementTextDescriptor.set;
 
         // NOTE: Event properties is located in window prototype only in IE11
         this.isEventPropsLocatedInProto = win.Window.prototype.hasOwnProperty('onerror');
@@ -897,6 +903,7 @@ class NativeMethods {
         this.nodeNextSiblingGetter           = win.Object.getOwnPropertyDescriptor(win.Node.prototype, 'nextSibling').get;
         this.nodePrevSiblingGetter           = win.Object.getOwnPropertyDescriptor(win.Node.prototype, 'previousSibling').get;
         this.nodeParentNodeGetter            = win.Object.getOwnPropertyDescriptor(win.Node.prototype, 'parentNode').get;
+        this.nodeChildNodesGetter            = win.Object.getOwnPropertyDescriptor(win.Node.prototype, 'childNodes').get;
         this.elementFirstElementChildGetter  = win.Object.getOwnPropertyDescriptor(win.Element.prototype, 'firstElementChild').get;
         this.elementLastElementChildGetter   = win.Object.getOwnPropertyDescriptor(win.Element.prototype, 'lastElementChild').get;
         this.elementNextElementSiblingGetter = win.Object.getOwnPropertyDescriptor(win.Element.prototype, 'nextElementSibling').get;
@@ -950,6 +957,8 @@ class NativeMethods {
             this.htmlManifestGetter = htmlManifestDescriptor.get;
             this.htmlManifestSetter = htmlManifestDescriptor.set;
         }
+
+        this.titleElementTextGetter = titleElementTextDescriptor.get;
 
         if (win.fetch) {
             this.responseStatusGetter = win.Object.getOwnPropertyDescriptor(win.Response.prototype, 'status').get;
