@@ -40,6 +40,13 @@ export function sendRequest (ctx: RequestPipelineContext) {
         req.on('error', err => {
             // NOTE: Sometimes the underlying socket emits an error event. But if we have a response body,
             // we can still process such requests. (B234324)
+
+            // P2 Note: Issue -> https://prodperfect.monday.com/boards/451757477/pulses/570777168
+            // We have noticed one instance where the 'end' event is not being emitted for finished requests
+            // This is manifesting as server requests being left open then all closed at the same time with associated
+            // ECONNRESET errors. Because these requests weren't properly ended, any page errors
+            // are redirected which is throwing an error that you can't set headers after sending a response to the client.
+            // For now, the solution is to check if the response finished and ignore the error if it has.
             if (ctx.isDestResReadableEnded || (err.code === 'ECONNRESET' && (ctx.res as any).finished)) {
                 resolve();
             } else {
