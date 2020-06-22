@@ -40,7 +40,7 @@ export function sendRequest (ctx: RequestPipelineContext) {
         req.on('error', err => {
             // NOTE: Sometimes the underlying socket emits an error event. But if we have a response body,
             // we can still process such requests. (B234324)
-            if (ctx.isDestResReadableEnded || (err.code === 'ECONNRESET' && ctx.res.finished)) {
+            if (ctx.isDestResReadableEnded || (err.code === 'ECONNRESET' && (ctx.res as any).finished)) {
                 resolve();
             } else {
                 error(ctx, getText(MESSAGE.destConnectionTerminated, ctx.dest.url, err.toString()));
