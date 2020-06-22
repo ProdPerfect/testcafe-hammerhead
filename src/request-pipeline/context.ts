@@ -390,10 +390,6 @@ export default class RequestPipelineContext {
             this.mock = mock;
     }
 
-    isDestResBodyMalformed (): boolean {
-        return !this.destResBody || this.destResBody.length.toString() !== this.destRes.headers['content-length'];
-    }
-
     getOnResponseEventData ({ includeBody }: { includeBody: boolean }): OnResponseEventData[] {
         return this.onResponseEventData.filter(eventData => eventData.opts.includeBody === includeBody);
     }
