@@ -1,16 +1,17 @@
 import { NAMESPACE_PREFIX_MAP } from '../processing/dom/namespaces';
 import { ASTAttribute, ASTNode } from 'parse5';
+import { Dictionary } from '../typings/common';
 
 const ATTR_NAMESPACE_LOCAL_NAME_SEPARATOR = ':';
 
-function isElementNode (el: ASTNode) {
+function isElementNode (el: ASTNode): boolean {
     return el.nodeName !== '#document' &&
         el.nodeName !== '#text' &&
         el.nodeName !== '#documentType' &&
         el.nodeName !== '#comment';
 }
 
-function getAttrName (attr: ASTAttribute) {
+function getAttrName (attr: ASTAttribute): string {
     return attr.prefix ? attr.prefix + ATTR_NAMESPACE_LOCAL_NAME_SEPARATOR + attr.name : attr.name;
 }
 
@@ -53,13 +54,36 @@ export function unshiftElement (el: ASTNode, parent: ASTNode): void {
 }
 
 export function insertBeforeFirstScript (el: ASTNode, parent: ASTNode): void {
-    el.namespaceURI = parent.namespaceURI;
-    el.parentNode   = parent;
+    const firstScriptIndex = findNodeIndex(parent, node => node.tagName === 'script');
+    const insertIndex      = firstScriptIndex !== -1 ? firstScriptIndex : parent.childNodes.length;
 
-    const firstScriptIndex = parent.childNodes.findIndex(node => node.tagName === 'script');
-    const elIndex          = firstScriptIndex !== -1 ? firstScriptIndex : parent.childNodes.length;
+    appendNode(el, parent, insertIndex);
+}
 
-    parent.childNodes.splice(elIndex, 0, el);
+export function findNodeIndex (parent: ASTNode, predicate: (value: ASTNode, index?: number, array?: ASTNode[] ) => boolean): number {
+    return parent && parent.childNodes
+        ? parent.childNodes.findIndex(predicate)
+        : -1;
+}
+
+export function findNextNonTextNode (parent: ASTNode, startIndex: number): ASTNode | null {
+    let currentNode = null;
+
+    while (currentNode = parent.childNodes[startIndex]){
+        if (currentNode.nodeName !== '#text')
+            return currentNode;
+
+        startIndex++;
+    }
+
+    return currentNode;
+}
+
+export function appendNode (node: ASTNode, parent: ASTNode, index: number): void {
+    node.namespaceURI = parent.namespaceURI;
+    node.parentNode   = parent;
+
+    parent.childNodes.splice(index, 0, node);
 }
 
 export function removeNode (node: ASTNode): void {
@@ -69,7 +93,7 @@ export function removeNode (node: ASTNode): void {
     parent.childNodes.splice(elIndex, 1);
 }
 
-export function findElementsByTagNames (root: ASTNode, tagNames: string[]): any {
+export function findElementsByTagNames (root: ASTNode, tagNames: string[]): Dictionary<ASTNode[]> {
     const elements = {};
 
     walkElements(root, el => {
@@ -82,7 +106,7 @@ export function findElementsByTagNames (root: ASTNode, tagNames: string[]): any 
     return elements;
 }
 
-export function findElement (el: ASTNode, predicate: (el: ASTNode) => boolean) {
+export function findElement (el: ASTNode, predicate: (el: ASTNode) => boolean): ASTNode | null {
     if (isElementNode(el) && predicate(el))
         return el;
 
@@ -125,13 +149,13 @@ export function removeAttr (el: ASTNode, name: string): void {
     }
 }
 
-export function getAttr (el, name: string) {
+export function getAttr (el, name: string): string | null {
     const attr = findAttr(el, name);
 
     return attr ? attr.value : null;
 }
 
-export function setAttr (el: ASTNode, name: string, value: string) {
+export function setAttr (el: ASTNode, name: string, value: string): string {
     const attr = findAttr(el, name);
 
     if (attr) {

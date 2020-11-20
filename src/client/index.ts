@@ -4,7 +4,6 @@ import EventEmitter from './utils/event-emitter';
 import XhrSandbox from './sandbox/xhr';
 import settings from './settings';
 import Transport from './transport';
-//@ts-ignore
 import * as JSON from 'json-hammerhead';
 import * as browserUtils from './utils/browser';
 import * as domUtils from './utils/dom';
@@ -33,7 +32,7 @@ import { Dictionary } from '../typings/common';
 import ShadowUI from './sandbox/shadow-ui';
 
 class Hammerhead {
-    win: Window;
+    win: Window & typeof globalThis;
     sandbox: Sandbox;
     pageNavigationWatch: PageNavigationWatch;
     EVENTS: Dictionary<string>;
@@ -53,7 +52,6 @@ class Hammerhead {
     utils: Dictionary<any>;
 
     constructor () {
-        //@ts-ignore
         this.win                 = null;
         this.transport           = new Transport();
         this.sandbox             = new Sandbox(this.transport);
@@ -186,7 +184,7 @@ class Hammerhead {
         }
     }
 
-    static _cleanLocalStorageServiceData (sessionId: string, window: Window) {
+    static _cleanLocalStorageServiceData (sessionId: string, window: Window): void {
         nativeMethods.winLocalStorageGetter.call(window).removeItem(sessionId);
     }
 
@@ -220,18 +218,16 @@ class Hammerhead {
         }
     }
 
-    start (initSettings: HammerheadInitSettings | null, win: Window): void {
-        this.win = win || window;
+    start (initSettings: HammerheadInitSettings, win: Window & typeof globalThis): void {
+        this.win = win || window as Window & typeof globalThis;
 
-        if (initSettings) {
-            settings.set(initSettings);
+        settings.set(initSettings);
 
-            if (initSettings.isFirstPageLoad)
-                Hammerhead._cleanLocalStorageServiceData(initSettings.sessionId, this.win);
+        if (initSettings.isFirstPageLoad)
+            Hammerhead._cleanLocalStorageServiceData(initSettings.sessionId, this.win);
 
-            domProcessor.forceProxySrcForImage = initSettings.forceProxySrcForImage;
-            domProcessor.allowMultipleWindows  = initSettings.allowMultipleWindows;
-        }
+        domProcessor.forceProxySrcForImage = initSettings.forceProxySrcForImage;
+        domProcessor.allowMultipleWindows  = initSettings.allowMultipleWindows;
 
         this.transport.start(this.eventSandbox.message);
         this.sandbox.attach(this.win);

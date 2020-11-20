@@ -2,7 +2,7 @@ import INTERNAL_PROPS from '../../../processing/dom/internal-properties';
 import SandboxBase from '../base';
 import UploadInfoManager from './info-manager';
 import { isFileInput } from '../../utils/dom';
-import { isIE, isFirefox, isChrome, isMacPlatform, isSafari, version as browserVersion } from '../../utils/browser';
+import { isIE, isIE11, isFirefox, isChrome, isMacPlatform, isSafari } from '../../utils/browser';
 import { stopPropagation, preventDefault } from '../../utils/event';
 import { get as getSandboxBackup } from '../backup';
 import nativeMethods from '../native-methods';
@@ -30,14 +30,13 @@ export default class UploadSandbox extends SandboxBase {
     }
 
     static _getCurrentInfoManager (input: HTMLInputElement) {
-        // @ts-ignore
         const contextWindow = input[INTERNAL_PROPS.processedContext];
 
         return getSandboxBackup(contextWindow).upload.infoManager;
     }
 
     /*eslint-disable max-nested-callbacks */
-    attach (window: Window) {
+    attach (window: Window & typeof globalThis) {
         super.attach(window);
 
         this._listeners.addInternalEventListener(window, ['change'], (e, dispatched) => {
@@ -94,13 +93,9 @@ export default class UploadSandbox extends SandboxBase {
         return UploadSandbox._getCurrentInfoManager(input).getValue(input);
     }
 
-    setUploadElementValue (input: HTMLInputElement, value: string) {
-        if (value === '') {
-            if (UploadSandbox._getCurrentInfoManager(input).clearUploadInfo(input) && isIE && browserVersion > 10)
-                this._riseChangeEvent(input);
-        }
-
-        return value;
+    setUploadElementValue (input: HTMLInputElement, value: string): void {
+        if (value === '' && UploadSandbox._getCurrentInfoManager(input).clearUploadInfo(input) && isIE11)
+            this._riseChangeEvent(input);
     }
 
     // GH-1844, GH-2007

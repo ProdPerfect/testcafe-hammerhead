@@ -13,7 +13,7 @@ const HOST_RE            = /^(.*?)(\/|%|\?|;|#|$)/;
 const PORT_RE            = /:([0-9]*)$/;
 const QUERY_AND_HASH_RE  = /(\?.+|#[^#]*)$/;
 const PATH_AFTER_HOST_RE = /^\/([^/]+?)\/([\S\s]+)$/;
-const HTTP_RE            = /^(?:https?):/;
+const HTTP_RE            = /^https?:/;
 const FILE_RE            = /^file:/i;
 
 export const SUPPORTED_PROTOCOL_RE                            = /^(?:https?|file):/i;
@@ -338,7 +338,6 @@ export function resolveUrlAsDest (url: string, getProxyUrlMeth: Function): strin
 export function formatUrl (parsedUrl: ParsedUrl): string {
     // NOTE: the URL is relative.
     if (parsedUrl.protocol !== 'file:' && !parsedUrl.host && (!parsedUrl.hostname || !parsedUrl.port))
-        //@ts-ignore
         return parsedUrl.partAfterHost;
 
     let url = parsedUrl.protocol || '';

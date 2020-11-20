@@ -2,7 +2,6 @@ import EventEmitter from '../../utils/event-emitter';
 import { isIE } from '../../utils/browser';
 import { parseProxyUrl } from '../../utils/url';
 import * as destLocation from '../../utils/destination-location';
-// @ts-ignore
 import * as JSON from 'json-hammerhead';
 import nativeMethods from '../native-methods';
 
@@ -43,6 +42,7 @@ export default class StorageWrapper {
     key: any;
     removeItem: any;
     setItem: any;
+    length: number;
 
     STORAGE_CHANGED_EVENT: string = 'hammerhead|event|storage-changed';
     EMPTY_OLD_VALUE_ARG: any;

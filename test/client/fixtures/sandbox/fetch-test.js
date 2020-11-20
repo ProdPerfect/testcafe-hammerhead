@@ -126,6 +126,12 @@ if (window.fetch) {
             });
     });
 
+    test('request.url', function () {
+        var request = new Request('/xhr-test/100');
+
+        strictEqual(request.url, 'https://example.com/xhr-test/100');
+    });
+
     module('Response.type', function () {
         test('basic', function () {
             return fetch('/xhr-test/100')
@@ -306,6 +312,24 @@ if (window.fetch) {
                     });
 
                     notEqual(headersEntriesArray.indexOf('www-authenticate: Basic realm="Login"'), -1);
+                });
+        });
+
+        test('the authorization and proxy-authorization header processing (GH-2344)', function () {
+            var headers = { 'content-type': 'text/plain' };
+
+            headers['Authorization']       = 'Basic qwerty';
+            headers['proxy-Authorization'] = 'Digital abcdifg';
+
+            return fetch('/echo-request-headers', { method: 'post', headers: headers })
+                .then(function (res) {
+                    return res.json();
+                })
+                .then(function (proxyHeaders) {
+                    notOk('authorization' in proxyHeaders);
+                    notOk('proxy-authorization' in proxyHeaders);
+                    strictEqual(proxyHeaders[INTERNAL_HEADERS.authorization], 'Basic qwerty');
+                    strictEqual(proxyHeaders[INTERNAL_HEADERS.proxyAuthorization], 'Digital abcdifg');
                 });
         });
 
@@ -733,6 +757,16 @@ if (window.fetch) {
                 });
         });
 
+        test('should not throw an error when a data-url is used in Request constructor (GH-2428)', function () {
+            return fetch(new Request('data:text/plain,foo'))
+                .then(function (res) {
+                    return res.text();
+                })
+                .then(function (body) {
+                    strictEqual(body, 'foo');
+                });
+        });
+
         test('should process headers passed as an array', function () {
             var headersArr = [
                 ['content-type', 'text/xml'],
@@ -763,11 +797,9 @@ if (window.fetch) {
                     return response.json();
                 })
                 .then(function (headers) {
-                    strictEqual(headers.authorization, '123', 'Authorization');
+                    strictEqual(headers[INTERNAL_HEADERS.authorization], '123', 'Authorization');
                     strictEqual(headers['content-type'], 'charset=utf-8', 'Content-Type');
                 });
         });
     });
 }
-
-

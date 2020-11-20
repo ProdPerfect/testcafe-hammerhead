@@ -1,4 +1,4 @@
-import parse5 from 'parse5';
+import parse5, { ASTNode } from 'parse5';
 import SHADOW_UI_CLASSNAME from '../../shadow-ui/class-name';
 import DomProcessor from '../dom';
 import DomAdapter from '../dom/parse5-dom-adapter';
@@ -11,26 +11,39 @@ import createSelfRemovingScript from '../../utils/create-self-removing-script';
 import RequestPipelineContext from '../../request-pipeline/context';
 import Charset from '../encoding/charset';
 import BaseDomAdapter from '../dom/base-dom-adapter';
+import SERVICE_ROUTES from '../../proxy/service-routes';
 
-const BODY_CREATED_EVENT_SCRIPT: string = createSelfRemovingScript(`
+const BODY_CREATED_EVENT_SCRIPT = createSelfRemovingScript(`
     if (window["${ INTERNAL_PROPS.hammerhead }"])
         window["${ INTERNAL_PROPS.hammerhead }"].sandbox.node.raiseBodyCreatedEvent();
 `);
 
+const ORIGIN_FIRST_TITLE_ELEMENT_LOADED_SCRIPT = createSelfRemovingScript(`
+    window["${ INTERNAL_PROPS.hammerhead }"].sandbox.node.onOriginFirstTitleElementInHeadLoaded();
+`);
+
+const PARSED_BODY_CREATED_EVENT_SCRIPT                = parse5.parseFragment(BODY_CREATED_EVENT_SCRIPT).childNodes[0];
+const PARSED_ORIGIN_FIRST_TITLE_ELEMENT_LOADED_SCRIPT = parse5.parseFragment(ORIGIN_FIRST_TITLE_ELEMENT_LOADED_SCRIPT).childNodes[0];
+
+interface PageProcessingOptions {
+    crossDomainProxyPort: number;
+    isIframe:             boolean;
+    stylesheets:          string[];
+    scripts:              string[];
+    urlReplacer:          Function;
+    isIframeWithImageSrc: boolean;
+}
+
 class PageProcessor extends ResourceProcessorBase {
     RESTART_PROCESSING: symbol;
-    PARSED_BODY_CREATED_EVENT_SCRIPT: parse5.ASTNode;
 
     constructor () {
         super();
 
-        const parsedDocumentFragment = parse5.parseFragment(BODY_CREATED_EVENT_SCRIPT);
-
-        this.RESTART_PROCESSING               = Symbol();
-        this.PARSED_BODY_CREATED_EVENT_SCRIPT = parsedDocumentFragment.childNodes[0];
+        this.RESTART_PROCESSING = Symbol();
     }
 
-    private _createRestoreStoragesScript (storageKey, storages) {
+    private _createRestoreStoragesScript (storageKey: string, storages): ASTNode {
         const scriptStr              = createSelfRemovingScript(`
             window.localStorage.setItem("${ storageKey }", ${ JSON.stringify(storages.localStorage) });
             window.sessionStorage.setItem("${ storageKey }", ${ JSON.stringify(storages.sessionStorage) });
@@ -40,7 +53,7 @@ class PageProcessor extends ResourceProcessorBase {
         return parsedDocumentFragment.childNodes[0];
     }
 
-    private static _getPageProcessingOptions (ctx: RequestPipelineContext, urlReplacer: Function) {
+    private static _getPageProcessingOptions (ctx: RequestPipelineContext, urlReplacer: Function): PageProcessingOptions {
         return {
             crossDomainProxyPort: ctx.serverInfo.crossDomainPort,
             isIframe:             ctx.isIframe,
@@ -65,12 +78,12 @@ class PageProcessor extends ResourceProcessorBase {
         return metas;
     }
 
-    private static _addPageResources (head: any, processingOptions: any) {
-        const result = [];
+    private static _addPageResources (head: ASTNode, processingOptions: PageProcessingOptions): ASTNode[] {
+        const injectedResources: ASTNode[] = [];
 
         if (processingOptions.stylesheets) {
             processingOptions.stylesheets.forEach(stylesheetUrl => {
-                result.unshift(parse5Utils.createElement('link', [
+                injectedResources.unshift(parse5Utils.createElement('link', [
                     { name: 'rel', value: 'stylesheet' },
                     { name: 'type', value: 'text/css' },
                     { name: 'class', value: SHADOW_UI_CLASSNAME.uiStylesheet },
@@ -82,7 +95,7 @@ class PageProcessor extends ResourceProcessorBase {
 
         if (processingOptions.scripts) {
             processingOptions.scripts.forEach(scriptUrl => {
-                result.push(parse5Utils.createElement('script', [
+                injectedResources.push(parse5Utils.createElement('script', [
                     { name: 'type', value: 'text/javascript' },
                     { name: 'class', value: SHADOW_UI_CLASSNAME.script },
                     { name: 'charset', value: 'UTF-8' },
@@ -91,18 +104,52 @@ class PageProcessor extends ResourceProcessorBase {
             });
         }
 
-        for (let i = result.length - 1; i > -1; i--)
-            parse5Utils.insertBeforeFirstScript(result[i], head);
+        for (let i = injectedResources.length - 1; i > -1; i--)
+            parse5Utils.insertBeforeFirstScript(injectedResources[i], head);
+
+        return injectedResources;
     }
 
-    private static _addCharsetInfo (head: any, charset: string) {
+    private static _getTaskScriptNodeIndex (head: ASTNode, ctx: RequestPipelineContext): number {
+        const taskScriptUrls = [
+            ctx.resolveInjectableUrl(SERVICE_ROUTES.task),
+            ctx.resolveInjectableUrl(SERVICE_ROUTES.iframeTask)
+        ];
+
+        return parse5Utils.findNodeIndex(head, node => {
+            return node.tagName === 'script' &&
+                !!node.attrs.find(attr => attr.name === 'class' && attr.value === SHADOW_UI_CLASSNAME.script) &&
+                !!node.attrs.find(attr => attr.name === 'src' && taskScriptUrls.includes(attr.value));
+        });
+    }
+
+    /**
+     * Inject the service script after the first title element
+     * or after injected resources,
+     * if they are placed right after the <title> tag
+     **/
+    private static _addPageOriginFirstTitleParsedScript (head: ASTNode, ctx: RequestPipelineContext): void {
+        const firstTitleNodeIndex = parse5Utils.findNodeIndex(head, node => node.tagName === 'title');
+
+        if (firstTitleNodeIndex === -1)
+            return;
+
+        const taskScriptNodeIndex = PageProcessor._getTaskScriptNodeIndex(head, ctx);
+        const insertIndex         = taskScriptNodeIndex > firstTitleNodeIndex
+            ? taskScriptNodeIndex + 1
+            : firstTitleNodeIndex + 1;
+
+        parse5Utils.appendNode(PARSED_ORIGIN_FIRST_TITLE_ELEMENT_LOADED_SCRIPT, head, insertIndex);
+    }
+
+    private static _addCharsetInfo (head: ASTNode, charset: string): void {
         parse5Utils.unshiftElement(parse5Utils.createElement('meta', [
             { name: 'class', value: SHADOW_UI_CLASSNAME.charset },
             { name: 'charset', value: charset }
         ]), head);
     }
 
-    private static _changeMetas (metas, domAdapter: BaseDomAdapter) {
+    private static _changeMetas (metas, domAdapter: BaseDomAdapter): void {
         if (metas) {
             metas.forEach(meta => {
                 // TODO: Figure out how to emulate the tag behavior.
@@ -119,15 +166,15 @@ class PageProcessor extends ResourceProcessorBase {
         return html;
     }
 
-    private _addRestoreStoragesScript (ctx: RequestPipelineContext, head: parse5.ASTNode) {
+    private _addRestoreStoragesScript (ctx: RequestPipelineContext, head: ASTNode): void {
         const storageKey            = getStorageKey(ctx.session.id, ctx.dest.host);
         const restoreStoragesScript = this._createRestoreStoragesScript(storageKey, ctx.restoringStorages);
 
         parse5Utils.insertBeforeFirstScript(restoreStoragesScript, head);
     }
 
-    private _addBodyCreatedEventScript (body: parse5.ASTNode) {
-        parse5Utils.unshiftElement(this.PARSED_BODY_CREATED_EVENT_SCRIPT, body);
+    private _addBodyCreatedEventScript (body: ASTNode): void {
+        parse5Utils.unshiftElement(PARSED_BODY_CREATED_EVENT_SCRIPT, body);
     }
 
     shouldProcessResource (ctx: RequestPipelineContext): boolean {
@@ -146,7 +193,7 @@ class PageProcessor extends ResourceProcessorBase {
         PageProcessor._prepareHtml(html, processingOpts);
 
         const root       = parse5.parse(html);
-        const domAdapter = new DomAdapter(processingOpts.isIframe, processingOpts.crossDomainProxyPort);
+        const domAdapter = new DomAdapter(processingOpts.isIframe, processingOpts.crossDomainProxyPort.toString());
         const elements   = parse5Utils.findElementsByTagNames(root, ['base', 'meta', 'head', 'body', 'frameset']);
         const base       = elements.base ? elements.base[0] : null;
         const baseUrl    = base ? domAdapter.getAttr(base, 'href') : '';
@@ -166,6 +213,7 @@ class PageProcessor extends ResourceProcessorBase {
 
         if (!ctx.isHtmlImport) {
             PageProcessor._addPageResources(head, processingOpts);
+            PageProcessor._addPageOriginFirstTitleParsedScript(head, ctx);
             this._addBodyCreatedEventScript(body);
 
             if (ctx.restoringStorages && !processingOpts.isIframe)

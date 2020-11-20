@@ -207,6 +207,161 @@ if (canCreateBlobFromNumberBooleanArray) {
     });
 }
 
+module('File');
+
+// IE11 doesn't support File constructor
+var isFileConstructable = (function () {
+    var array = [true, false, 1, 0];
+
+    try {
+        return !!new nativeMethods.File(array, 'file.js');
+    }
+    catch (err) {
+        return false;
+    }
+})();
+
+if (isFileConstructable) {
+    test('window.File should be overridden', function () {
+        notEqual(window.File, nativeMethods.File);
+    });
+
+    test('window.File([data], "file.name", { type: "" }) should return correct result for `ArrayBuffer`, `Uint8Array` and `DataView` data types', function () {
+        var bmpExample = {
+            signature: [0x42, 0x4D]
+        };
+
+        var testConstructor = function (constructor) {
+            return new Promise(function (resolve) {
+                var arrayBuffer;
+                var data;
+                var typedArray;
+                var i;
+
+                if (constructor === ArrayBuffer) {
+                    arrayBuffer = new constructor(bmpExample.signature.length);
+                    typedArray  = new Uint8Array(arrayBuffer);
+
+                    for (i = 0; i < typedArray.length; i++)
+                        typedArray[i] = bmpExample.signature[i];
+
+                    data = arrayBuffer;
+                }
+                else if (constructor === DataView) {
+                    arrayBuffer = new ArrayBuffer(bmpExample.signature.length);
+                    typedArray  = new Uint8Array(arrayBuffer);
+
+                    for (i = 0; i < typedArray.length; i++)
+                        typedArray[i] = bmpExample.signature[i];
+
+                    var dataView = new constructor(arrayBuffer);
+
+                    data = browserUtils.isIE11 ? dataView.buffer : dataView;
+                }
+                else {
+                    typedArray = new constructor(bmpExample.signature);
+                    data       = typedArray;
+                }
+
+                var resultFile = new File([data], 'file.name', { type: '' });
+                var fileReader = new FileReader();
+
+                fileReader.onload = function () {
+                    var resultArrayBuffer = this.result;
+
+                    var resultTypedArray = constructor === ArrayBuffer || constructor === DataView
+                        ? new Uint8Array(resultArrayBuffer)
+                        : new constructor(resultArrayBuffer);
+
+                    var resultArray = [].slice.call(resultTypedArray);
+
+                    strictEqual(resultArray.toString(), bmpExample.signature.toString());
+                    resolve();
+                };
+
+                fileReader.readAsArrayBuffer(resultFile);
+            });
+        };
+
+        return Promise.all([
+            testConstructor(ArrayBuffer),
+            testConstructor(Uint8Array),
+            testConstructor(DataView)
+        ]);
+    });
+
+    asyncTest('should process File parts in the case of the "Array<string | number | boolean>" array', function () {
+        var parts = ['var test = ', 1, '+', true, ';'];
+
+        var expectedScript = processScript(parts.join(''), true).replace(/\s/g, '');
+
+        var file   = new window.File(parts, { type: 'texT/javascript' });
+        var reader = new FileReader();
+
+        reader.addEventListener('loadend', function (e) {
+            strictEqual(e.target.result.replace(/\s/g, ''), expectedScript);
+            start();
+        });
+
+        reader.readAsText(file);
+    });
+
+    if (canCreateBlobFromNumberBooleanArray) {
+        test('should not process unprocessable File parts', function () {
+            var unprocessableFileParts = [true, false, 1, 0];
+            var processableFileParts   = ['const val1 =', true, '; const var2 =', 1];
+
+            var testCases = [
+                {
+                    fileParts: unprocessableFileParts,
+                    options:   { type: '' }
+                },
+                {
+                    fileParts: unprocessableFileParts,
+                    options:   { type: 'text/javascript' }
+                },
+                {
+                    fileParts: processableFileParts.concat([new nativeMethods.File(['unprocessable part'], 'file.name')]),
+                    options:   { type: '' }
+                },
+                {
+                    fileParts: processableFileParts.concat([new nativeMethods.File(['unprocessable part'], 'file.name')]),
+                    options:   { type: 'text/javascript' }
+                }
+            ];
+
+            var readFileContent = function (file) {
+                return new hammerhead.Promise(function (resolve) {
+                    var reader = new FileReader();
+
+                    reader.addEventListener('loadend', function () {
+                        var arr = new Uint8Array(this.result);
+
+                        resolve(arr);
+                    });
+                    reader.readAsArrayBuffer(file);
+                });
+            };
+
+            return Promise.all(testCases.map(function (testCase) {
+                var overridenFile  = new File(testCase.fileParts, 'file.name', testCase.options);
+                var nativeFile     = new nativeMethods.File(testCase.fileParts, 'file.name', testCase.options);
+                var redFileContent = null;
+
+                return readFileContent(overridenFile)
+                    .then(function (fileContent) {
+                        redFileContent = fileContent;
+
+                        return readFileContent(nativeFile);
+                    })
+                    .then(function (nativeFileContent) {
+                        deepEqual(redFileContent, nativeFileContent);
+                    });
+            }));
+        });
+    }
+}
+
 module('Image');
 
 test('window.Image should be overridden', function () {
@@ -218,88 +373,6 @@ test('should work with the operator "instanceof" (GH-690)', function () {
 
     ok(img instanceof Image);
 });
-
-module('Worker');
-
-if (window.Worker) {
-    test('window.Worker should be overridden', function () {
-        notEqual(window.Worker, nativeMethods.Worker);
-    });
-
-    test('throwing errors (GH-1132)', function () {
-        throws(function () {
-            window.Worker();
-        }, TypeError);
-
-        throws(function () {
-            // eslint-disable-next-line no-new
-            new Worker();
-        }, TypeError);
-    });
-
-    test('checking parameters (GH-1132)', function () {
-        var savedNativeWorker = nativeMethods.Worker;
-        var workerOptions     = { name: 'test' };
-        var resourceType      = urlUtils.stringifyResourceType({ isScript: true });
-
-        nativeMethods.Worker = function (scriptURL) {
-            strictEqual(arguments.length, 1);
-            strictEqual(scriptURL, urlUtils.getProxyUrl('/test', { resourceType: resourceType }));
-        };
-        // eslint-disable-next-line no-new
-        new Worker('/test');
-
-        nativeMethods.Worker = function (scriptURL, options) {
-            strictEqual(arguments.length, 2);
-            strictEqual(scriptURL, urlUtils.getProxyUrl('/test', { resourceType: resourceType }));
-            strictEqual(options, workerOptions);
-        };
-        /* eslint-disable no-new */
-        new Worker('/test', workerOptions);
-        /* eslint-enable no-new */
-
-        nativeMethods.Worker = savedNativeWorker;
-    });
-
-    test('should work with the operator "instanceof" (GH-690)', function () {
-        var blob   = new Blob(['if(true) {}'], { type: 'text/javascript' });
-        var url    = URL.createObjectURL(blob);
-        var worker = new Worker(url);
-
-        ok(worker instanceof Worker);
-    });
-
-    test('calling overridden window.Worker should not cause the "use the \'new\'..." error (GH-1970)', function () {
-        expect(0);
-
-        var SavedWindowWorker = window.Worker;
-
-        window.Worker = function (scriptURL) {
-            return new SavedWindowWorker(scriptURL);
-        };
-
-        try {
-            // eslint-disable-next-line no-new
-            new Worker('/test');
-        }
-        catch (e) {
-            ok(false);
-        }
-
-        window.Worker = SavedWindowWorker;
-    });
-
-    test('calling Worker without the "new" keyword (GH-1970)', function () {
-        expect(browserUtils.isIE11 || browserUtils.isMSEdge ? 0 : 1);
-
-        try {
-            Worker('/test');
-        }
-        catch (e) {
-            ok(true);
-        }
-    });
-}
 
 module('EventSource');
 
@@ -576,7 +649,10 @@ if (window.FormData) {
                 type: 'text/plain',
                 name: 'correctName.txt'
             },
-            blob: new Blob(['text'], { type: 'text/plain' })
+            // NOTE: window.File in IE11 is not constructable.
+            blob: nativeMethods.File
+                ? new File(['text'], 'correctName.txt', { type: 'text/plain' })
+                : new Blob(['text'], { type: 'text/plain' })
         }));
         formData.append(INTERNAL_ATTRS.uploadInfoHiddenInputName, '[]');
 
@@ -618,20 +694,6 @@ test('window.Image must be overriden (B234340)', function () {
     strictEqual(getOuterHTML.call(new Image(15, 15)), getOuterHTML.call(new NativeImage(15, 15)));
     strictEqual(getOuterHTML.call(new Image(void 0)), getOuterHTML.call(new NativeImage(void 0)));
     strictEqual(getOuterHTML.call(new Image(void 0, void 0)), getOuterHTML.call(new NativeImage(void 0, void 0)));
-});
-
-asyncTest('window.Blob with type=javascript must be overriden (T259367)', function () {
-    var script = ['self.onmessage = function() { var t = {};', '__set$(t, "blobTest", true); postMessage(t.blobTest); };'];
-    var blob   = new window.Blob(script, { type: 'texT/javascript' });
-    var url    = window.URL.createObjectURL(blob);
-    var worker = new window.Worker(url);
-
-    worker.onmessage = function (e) {
-        strictEqual(e.data, true);
-        start();
-    };
-
-    worker.postMessage('');
 });
 
 if (navigator.registerProtocolHandler) {

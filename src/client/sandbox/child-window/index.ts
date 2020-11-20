@@ -21,7 +21,6 @@ export default class ChildWindowSandbox extends SandboxBase {
     readonly WINDOW_OPENED_EVENT = 'hammerhead|event|window-opened';
     private _childWindows: Set<Window> | null;
 
-    // @ts-ignore
     constructor (private readonly _messageSandbox: MessageSandbox,
         private readonly _listeners: Listeners) {
         super();
@@ -162,7 +161,7 @@ export default class ChildWindowSandbox extends SandboxBase {
         return childWindows;
     }
 
-    attach(window: Window): void {
+    attach(window: Window & typeof globalThis): void {
         super.attach(window, window.document);
         this._handleFormSubmitting(window);
         this._setupChildWindowCollecting(window);

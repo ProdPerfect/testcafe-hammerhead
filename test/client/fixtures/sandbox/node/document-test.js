@@ -288,40 +288,46 @@ module('overridden descriptors');
 
 if (nativeMethods.documentDocumentURIGetter) {
     test('document.documentURI', function () {
-        var savedParseProxyUrl = urlUtils.parseProxyUrl;
+        var savedDocumentURIGetter = nativeMethods.documentDocumentURIGetter;
 
-        urlUtils.parseProxyUrl = function () {
-            return null;
+        nativeMethods.documentDocumentURIGetter = function () {
+            return 'http://example.com/';
         };
 
-        strictEqual(document.documentURI, nativeMethods.documentDocumentURIGetter.call(document));
+        strictEqual(document.documentURI, 'http://example.com/');
 
-        urlUtils.parseProxyUrl = function () {
-            return { destUrl: 'destUrl' };
+        nativeMethods.documentDocumentURIGetter = function () {
+            return urlUtils.getProxyUrl('http://example.com/');
         };
 
-        strictEqual(document.documentURI, 'destUrl');
+        strictEqual(document.documentURI, 'http://example.com/');
 
-        urlUtils.parseProxyUrl = savedParseProxyUrl;
+        nativeMethods.documentDocumentURIGetter = savedDocumentURIGetter;
     });
 }
 
 test('document.referrer', function () {
-    var savedParseProxyUrl = urlUtils.parseProxyUrl;
+    var savedDocumentReferrerGetter = nativeMethods.documentReferrerGetter;
 
-    urlUtils.parseProxyUrl = function () {
+    nativeMethods.documentReferrerGetter = function () {
         return null;
     };
 
-    strictEqual(document.referrer, '');
+    strictEqual(document.referrer, null);
 
-    urlUtils.parseProxyUrl = function () {
-        return { destUrl: '123' };
+    nativeMethods.documentReferrerGetter = function () {
+        return 'http://example.com/';
     };
 
-    strictEqual(document.referrer, '123');
+    strictEqual(document.referrer, 'http://example.com/');
 
-    urlUtils.parseProxyUrl = savedParseProxyUrl;
+    nativeMethods.parseProxyUrl = function () {
+        return urlUtils.getProxyUrl('http://example.com/');
+    };
+
+    strictEqual(document.referrer, 'http://example.com/');
+
+    nativeMethods.documentReferrerGetter = savedDocumentReferrerGetter;
 });
 
 test('document.URL', function () {
@@ -452,21 +458,21 @@ test('document.scripts', function () {
 
 if (nativeMethods.nodeBaseURIGetter) {
     test('document.baseURI (GH-920)', function () {
-        var storedGetProxyUrl = urlUtils.parseProxyUrl;
+        var savedNodeBaseURIGetter = nativeMethods.nodeBaseURIGetter;
 
-        urlUtils.parseProxyUrl = function () {
-            return { destUrl: 'destUrl' };
+        nativeMethods.nodeBaseURIGetter = function () {
+            return urlUtils.getProxyUrl('http://example.com/');
         };
 
-        strictEqual(document.baseURI, 'destUrl');
+        strictEqual(document.baseURI, 'http://example.com/');
 
-        urlUtils.parseProxyUrl = function () {
-            return null;
+        nativeMethods.nodeBaseURIGetter = function () {
+            return 'http://example.com/';
         };
 
-        strictEqual(document.baseURI, location.toString());
+        strictEqual(document.baseURI, 'http://example.com/');
 
-        urlUtils.parseProxyUrl = storedGetProxyUrl;
+        nativeMethods.nodeBaseURIGetter = savedNodeBaseURIGetter;
     });
 }
 
@@ -523,15 +529,6 @@ module('document.title', {
 test('basic', function () {
     strictEqual(document.title, '');
     strictEqual(document.title = 'end-user title', 'end-user title');
-});
-
-test('initial value', function () {
-    var src = getSameDomainPageUrl('../../../data/document_title/initial_value.html');
-
-    return createTestIframe({ src: src })
-        .then(function (iframe) {
-            strictEqual(iframe.contentDocument.title, 'Site title');
-        });
 });
 
 test('text properties of the first <title> element', function () {
@@ -640,18 +637,41 @@ test('<title> from another window', function () {
         });
 });
 
-test('create <title> element if it does not exists', function () {
-    var titles = document.getElementsByTagName('title');
+test('creation via set "innerHTML" or "outerHTML"', function () {
+    var div = document.createElement('div');
 
-    for (var i = 0; i < titles.length; i++)
-        titles[0].parentNode.removeChild(titles[0]);
+    div.innerHTML = '<div id="d1"><title>Title from innerHTML</title></div>';
 
-    strictEqual(document.title, '');
+    document.body.appendChild(div);
 
-    document.title = 'Test title';
+    var title = div.getElementsByTagName('title')[0];
 
-    strictEqual(titles.length, 1);
-    strictEqual(titles[0].text, 'Test title');
+    strictEqual(title.text, 'Title from innerHTML');
+
+    div.firstChild.outerHTML = '<div id="d2"><div><title>Title from outerHTML</title></div></div>';
+
+    title = div.getElementsByTagName('title')[0];
+
+    strictEqual(title.text, 'Title from outerHTML');
+});
+
+test("SVG's <title> element (GH-2364)", function () {
+    var div = document.createElement('div');
+
+    div.innerHTML =
+        '<svg viewBox="0 0 20 10" xmlns="http://www.w3.org/2000/svg">' +
+        '  <circle cx="5" cy="5" r="4">' +
+        '    <title>I am a circle</title>' +
+        '  </circle>' +
+        '</svg>';
+
+    document.body.appendChild(div);
+
+    var title = div.getElementsByTagName('title')[0];
+
+    strictEqual(title.textContent, 'I am a circle');
+
+    div.parentNode.removeChild(div);
 });
 
 module('regression');
@@ -873,7 +893,7 @@ test('an iframe should not contain self-removing scripts after document.close (G
         });
 });
 
-test('should not throw an error when document.defualtView is null (GH-1272)', function () {
+test('should not throw an error when document.defaultView is null (GH-1272)', function () {
     return new Promise(function (resolve, reject) {
         var iframe         = document.createElement('iframe');
         var loadEventCount = 0;

@@ -19,6 +19,7 @@ import CookieSandbox from '../cookie';
 import * as browserUtils from '../../utils/browser';
 import ChildWindowSandbox from '../child-window';
 import DocumentTitleStorage from './document/title-storage';
+import DocumentTitleStorageInitializer from './document/title-storage-initializer';
 
 const ATTRIBUTE_SELECTOR_REG_EX          = /\[([\w-]+)(\^?=.+?)]/g;
 const ATTRIBUTE_OPERATOR_WITH_HASH_VALUE = /^\W+\s*#/;
@@ -30,7 +31,7 @@ export default class NodeSandbox extends SandboxBase {
     doc: DocumentSandbox;
     win: WindowSandbox;
     element: ElementSandbox;
-    private _documentTitleStorage: DocumentTitleStorage
+    private readonly _documentTitleStorageInitializer: DocumentTitleStorageInitializer | null;
 
     constructor (readonly mutation: NodeMutation,
         readonly iframeSandbox: IframeSandbox,
@@ -50,10 +51,19 @@ export default class NodeSandbox extends SandboxBase {
             writable: true
         });
 
-        this._documentTitleStorage = new DocumentTitleStorage();
-        this.doc                   = new DocumentSandbox(this, this.shadowUI, this._cookieSandbox, this._documentTitleStorage);
-        this.win                   = new WindowSandbox(this, this._eventSandbox, this._uploadSandbox, this.mutation, this._childWindowSandbox, this._documentTitleStorage);
-        this.element               = new ElementSandbox(this, this._uploadSandbox, this.iframeSandbox, this.shadowUI, this._eventSandbox, this._childWindowSandbox);
+        this._documentTitleStorageInitializer = NodeSandbox._createDocumentTitleStorageInitializer();
+        this.doc                              = new DocumentSandbox(this, this.shadowUI, this._cookieSandbox, this._documentTitleStorageInitializer);
+        this.win                              = new WindowSandbox(this, this._eventSandbox, this._uploadSandbox, this.mutation, this._childWindowSandbox, this._documentTitleStorageInitializer);
+        this.element                          = new ElementSandbox(this, this._uploadSandbox, this.iframeSandbox, this.shadowUI, this._eventSandbox, this._childWindowSandbox);
+    }
+
+    private static _createDocumentTitleStorageInitializer (): DocumentTitleStorageInitializer | null {
+        if (window !== window.top)
+            return null;
+
+        const documentTitleStorage = new DocumentTitleStorage(document);
+
+        return new DocumentTitleStorageInitializer(documentTitleStorage);
     }
 
     private _onBodyCreated (): void {
@@ -61,7 +71,7 @@ export default class NodeSandbox extends SandboxBase {
         this.mutation.onBodyCreated(this.document.body as HTMLBodyElement);
     }
 
-    private _processElement (el) {
+    private _processElement (el: HTMLElement): void {
         const processedContext = el[INTERNAL_PROPS.processedContext];
 
         if (domUtils.isShadowUIElement(el) || processedContext === this.window)
@@ -91,7 +101,12 @@ export default class NodeSandbox extends SandboxBase {
         this.element.processElement(el);
     }
 
-    processNodes (el, doc?: Document) {
+    onOriginFirstTitleElementInHeadLoaded (): void {
+        if(this._documentTitleStorageInitializer)
+            this._documentTitleStorageInitializer.onPageTitleLoaded();
+    }
+
+    processNodes (el: HTMLElement, doc?: Document): void {
         if (!el) {
             doc = doc || this.document;
 
@@ -112,12 +127,14 @@ export default class NodeSandbox extends SandboxBase {
     // NOTE: DOM sandbox hides evidence of the content proxying from a page native script. Proxy replaces URLs for
     // resources. Our goal is to make the native script think that all resources are fetched from the destination
     // resource, not from proxy, and also provide proxying for dynamically created elements.
-    attach (window) {
+    attach (window: Window & typeof globalThis): void {
         const document                  = window.document;
         let domContentLoadedEventRaised = false;
 
         super.attach(window, document);
-        this._documentTitleStorage.init(document);
+
+        if (this._documentTitleStorageInitializer)
+            this._documentTitleStorageInitializer.onAttach();
 
         this.iframeSandbox.on(this.iframeSandbox.IFRAME_DOCUMENT_CREATED_EVENT, ({ iframe }) => {
             const contentWindow   = nativeMethods.contentWindowGetter.call(iframe);
@@ -125,6 +142,7 @@ export default class NodeSandbox extends SandboxBase {
 
             // NOTE: Before overriding the iframe, we must restore native document methods.
             // Therefore, we save them before they are overridden.
+            // @ts-ignore
             const iframeNativeMethods = new this.nativeMethods.constructor(contentDocument, contentWindow);
 
             contentWindow[INTERNAL_PROPS.iframeNativeMethods] = iframeNativeMethods;
@@ -165,7 +183,7 @@ export default class NodeSandbox extends SandboxBase {
         this.element.attach(window);
     }
 
-    private static _processAttributeSelector (selector) {
+    private static _processAttributeSelector (selector: string): string {
         if (!ATTRIBUTE_SELECTOR_REG_EX.test(selector))
             return selector;
 
@@ -181,7 +199,7 @@ export default class NodeSandbox extends SandboxBase {
         });
     }
 
-    static _processPseudoClassSelectors (selector: string) {
+    static _processPseudoClassSelectors (selector: string): string {
         // NOTE: When a selector that contains the ':focus' pseudo-class is used in the querySelector and
         // querySelectorAll functions, these functions return an empty result if the browser is not focused.
         // This replaces ':focus' with a custom CSS class to return the current active element in that case.
@@ -195,7 +213,7 @@ export default class NodeSandbox extends SandboxBase {
         return selector;
     }
 
-    static processSelector (selector) {
+    static processSelector (selector: string): string {
         if (selector) {
             selector = NodeSandbox._processPseudoClassSelectors(selector);
             selector = NodeSandbox._processAttributeSelector(selector);

@@ -149,7 +149,7 @@ export default class RequestPipelineContext {
     }
 
     private _resolveInjectableUrls (injectableUrls: string[]): string[] {
-        return injectableUrls.map(url => this.serverInfo.domain + url);
+        return injectableUrls.map(url => this.resolveInjectableUrl(url));
     }
 
     private _initRequestNatureInfo (): void {
@@ -236,7 +236,7 @@ export default class RequestPipelineContext {
     buildContentInfo () {
         const contentType = this.destRes.headers[BUILTIN_HEADERS.contentType] as string || '';
         const accept      = this.req.headers[BUILTIN_HEADERS.accept] as string || '';
-        const encoding    = this.destRes.headers[BUILTIN_HEADERS.contentEncoding] as string;
+        const encoding    = (this.destRes.headers[BUILTIN_HEADERS.contentEncoding] as string || '').toLowerCase();
 
         if (this.isPage && contentType)
             this.isPage = !this.isAjax && contentTypeUtils.isPage(contentType);
@@ -349,7 +349,7 @@ export default class RequestPipelineContext {
     toProxyUrl (url: string, isCrossDomain: boolean, resourceType: string, charset?: string): string {
         const proxyHostname = this.serverInfo.hostname;
         const proxyProtocol = this.serverInfo.protocol;
-        const proxyPort     = isCrossDomain ? this.serverInfo.crossDomainPort : this.serverInfo.port;
+        const proxyPort     = isCrossDomain ? this.serverInfo.crossDomainPort.toString() : this.serverInfo.port.toString();
         const sessionId     = this.session.id;
         const windowId      = this.windowId;
 
@@ -407,5 +407,9 @@ export default class RequestPipelineContext {
 
     getOnResponseEventData ({ includeBody }: { includeBody: boolean }): OnResponseEventData[] {
         return this.onResponseEventData.filter(eventData => eventData.opts.includeBody === includeBody);
+    }
+
+    resolveInjectableUrl (url: string): string {
+        return this.serverInfo.domain + url;
     }
 }

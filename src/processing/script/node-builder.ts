@@ -28,43 +28,45 @@ import {
     LogicalExpression,
     LogicalOperator,
     ReturnStatement,
-    FunctionExpression
+    FunctionExpression,
+    ConditionalExpression,
+    UnaryOperator,
+    UnaryExpression
 } from 'estree';
-
 import { Syntax } from 'esotope-hammerhead';
-import INTERNAL_LITERAL from './internal-literal';
 import INSTRUCTION from './instruction';
 import { getResourceTypeString } from '../../utils/url';
+import TempVariables from './transformers/temp-variables';
 
-function createIdentifier (name: string): Identifier {
+export function createIdentifier (name: string): Identifier {
     return { type: Syntax.Identifier, name };
 }
 
-function createExpressionStatement (expression: Expression): ExpressionStatement {
+export function createExpressionStatement (expression: Expression): ExpressionStatement {
     return { type: Syntax.ExpressionStatement, expression };
 }
 
-function createAssignmentExpression (left: Pattern | MemberExpression, operator: AssignmentOperator, right: Expression): AssignmentExpression {
+export function createAssignmentExpression (left: Pattern | MemberExpression, operator: AssignmentOperator, right: Expression): AssignmentExpression {
     return { type: Syntax.AssignmentExpression, operator, left, right };
 }
 
-function createSimpleCallExpression (callee: Expression | Super, args: (Expression | SpreadElement)[]): SimpleCallExpression {
+export function createSimpleCallExpression (callee: Expression | Super, args: (Expression | SpreadElement)[]): SimpleCallExpression {
     return { type: Syntax.CallExpression, callee, arguments: args };
 }
 
-function createArrayExpression (elements: (Expression | SpreadElement)[]): ArrayExpression {
+export function createArrayExpression (elements: (Expression | SpreadElement)[]): ArrayExpression {
     return { type: Syntax.ArrayExpression, elements };
 }
 
-function createMemberExpression (object: Expression | Super, property: Expression, computed: boolean): MemberExpression {
+export function createMemberExpression (object: Expression | Super, property: Expression, computed: boolean): MemberExpression {
     return { type: Syntax.MemberExpression, object, property, computed };
 }
 
-function createBinaryExpression (left: Expression, operator: BinaryOperator, right: Expression): BinaryExpression {
+export function createBinaryExpression (left: Expression, operator: BinaryOperator, right: Expression): BinaryExpression {
     return { type: Syntax.BinaryExpression, left, right, operator };
 }
 
-function createSequenceExpression (expressions: Expression[]): SequenceExpression {
+export function createSequenceExpression (expressions: Expression[]): SequenceExpression {
     return { type: Syntax.SequenceExpression, expressions };
 }
 
@@ -76,7 +78,7 @@ function createLogicalExpression (left: Expression, operator: LogicalOperator, r
     return { type: Syntax.LogicalExpression, left, right, operator }
 }
 
-function createReturnStatement (argument: Expression = null): ReturnStatement {
+export function createReturnStatement (argument: Expression = null): ReturnStatement {
     return { type: Syntax.ReturnStatement, argument };
 }
 
@@ -84,15 +86,23 @@ function createFunctionExpression (id: Identifier | null, params: Pattern[], bod
     return { type: Syntax.FunctionExpression, id, params, body, async, generator };
 }
 
+function createUnaryExpression(operator: UnaryOperator, argument: Expression): UnaryExpression {
+    return { type: Syntax.UnaryExpression, operator, prefix: true, argument };
+}
+
+export function createUndefined (): UnaryExpression {
+    return createUnaryExpression('void', createSimpleLiteral(0));
+}
+
+export function createConditionalExpression (test: Expression, consequent: Expression, alternate: Expression): ConditionalExpression {
+    return { type: Syntax.ConditionalExpression, test, consequent, alternate };
+}
+
 export function createSimpleLiteral (value: string | boolean | number | null): SimpleLiteral {
     return { type: Syntax.Literal, value };
 }
 
-export function createTempVarIdentifier (): Identifier {
-    return createIdentifier(INTERNAL_LITERAL.tempVar);
-}
-
-export function createAssignmentExprStmt (left: MemberExpression, right: Identifier): ExpressionStatement {
+export function createAssignmentExprStmt (left: Pattern | MemberExpression, right: Identifier): ExpressionStatement {
     return createExpressionStatement(createAssignmentExpression(left, '=', right));
 }
 
@@ -125,7 +135,7 @@ export function createLocationGetWrapper (location: Identifier): CallExpression 
 }
 
 export function createLocationSetWrapper (locationIdentifier: Identifier, value: Expression, wrapWithSequence: boolean): Expression {
-    const tempIdentifier            = createTempVarIdentifier();
+    const tempIdentifier            = createIdentifier(TempVariables.generateName());
     const setLocationIdentifier     = createIdentifier(INSTRUCTION.setLocation);
     const setLocationCall           = createSimpleCallExpression(setLocationIdentifier, [locationIdentifier, tempIdentifier]);
     const locationAssignment        = createAssignmentExpression(locationIdentifier, '=', tempIdentifier);
@@ -217,4 +227,13 @@ export function createHtmlProcessorWrapper (node: ExpressionStatement): Expressi
     const processHtmlCall          = createSimpleCallExpression(processHtmlThroughParent, [windowIdentifier, node.expression]);
 
     return createExpressionStatement(processHtmlCall);
+}
+
+export function createTempVarsDeclaration (tempVars: string[]): VariableDeclaration {
+    const declarations: VariableDeclarator[] = [];
+
+    for (const variable of tempVars)
+        declarations.push(createVariableDeclarator(createIdentifier(variable)));
+
+    return createVariableDeclaration('var', declarations);
 }

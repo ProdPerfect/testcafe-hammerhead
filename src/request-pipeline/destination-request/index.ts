@@ -6,7 +6,6 @@ import { noop } from 'lodash';
 import semver from 'semver';
 import * as requestAgent from './agent';
 import { EventEmitter } from 'events';
-// @ts-ignore
 import { getAuthInfo, addCredentials, requiresResBody } from 'webauth';
 import connectionResetGuard from '../connection-reset-guard';
 import { MESSAGE, getText } from '../../messages';
@@ -81,6 +80,14 @@ export default class DestinationRequest extends EventEmitter implements Destinat
             });
             this.opts.headers = storedHeaders;
 
+            if (logger.destinationSocket.enabled) {
+                this.req.on('socket', socket => {
+                    socket.once('data', data =>
+                        logger.destinationSocket('Destination request socket first chunk of data %s %d %s', this.opts.requestId, data.length, JSON.stringify(data.toString())));
+                    socket.once('error', err => logger.destinationSocket('Destination request socket error %s %o', this.opts.requestId, err));
+                });
+            }
+
             if (!waitForData)
                 this.req.on('response', (res: http.IncomingMessage) => this._onResponse(res));
 
@@ -148,7 +155,7 @@ export default class DestinationRequest extends EventEmitter implements Destinat
         if (!this.aborted) {
             this.aborted = true;
             this.req.abort();
-            this.emit('fatalError', getText(msg, url || this.opts.url));
+            this.emit('fatalError', getText(msg, { url: url || this.opts.url }));
         }
     }
 

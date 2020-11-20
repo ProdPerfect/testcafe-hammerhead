@@ -17,7 +17,7 @@ import {
 } from '../../../../utils/url';
 import nativeMethods from '../../native-methods';
 import urlResolver from '../../../utils/url-resolver';
-import DomProcessor from '../../../../processing/dom/index';
+import DomProcessor from '../../../../processing/dom';
 import DOMStringListWrapper from './ancestor-origins-wrapper';
 import IntegerIdGenerator from '../../../utils/integer-id-generator';
 import { createOverriddenDescriptor } from '../../../utils/property-overriding';
@@ -36,7 +36,7 @@ function getLocationUrl (window: Window): string | undefined {
 }
 
 export default class LocationWrapper {
-    constructor (window: Window, messageSandbox?: MessageSandbox, onChanged?: Function) {
+    constructor (window: Window, messageSandbox: MessageSandbox, onChanged: Function) {
         const parsedLocation         = parseProxyUrl(getLocationUrl(window) as string);
         const locationResourceType   = parsedLocation ? parsedLocation.resourceType : '';
         const parsedResourceType     = parseResourceType(locationResourceType);

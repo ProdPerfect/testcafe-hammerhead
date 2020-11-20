@@ -5,7 +5,6 @@ import nativeMethods from '../sandbox/native-methods';
 import DomProcessor from '../../processing/dom';
 import { isShadowUIElement, isIframeWithoutSrc, getTagName } from '../utils/dom';
 import { isFirefox, isWebKit, isIE } from '../utils/browser';
-// @ts-ignore
 import * as JSON from 'json-hammerhead';
 import NodeMutation from './node/mutation';
 import CookieSandbox from './cookie';
@@ -49,6 +48,7 @@ export default class IframeSandbox extends SandboxBase {
             this.iframeNativeMethodsBackup = null;
         }
         else if (this._shouldSaveIframeNativeMethods(iframe))
+            // @ts-ignore
             this.iframeNativeMethodsBackup = new this.nativeMethods.constructor(contentDocument, contentWindow);
     }
 

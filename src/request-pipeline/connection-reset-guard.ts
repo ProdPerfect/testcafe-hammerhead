@@ -1,5 +1,4 @@
 import domain from 'domain';
-// @ts-ignore
 import os from 'os-family';
 
 const connectionResetDomain = domain.create();
@@ -15,6 +14,6 @@ connectionResetDomain.on('error', err => {
     throw err;
 });
 
-export default function (fn: Function) {
+export default function (fn: (...args: any[]) => unknown) {
     connectionResetDomain.run(fn);
 }

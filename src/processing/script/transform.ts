@@ -2,8 +2,8 @@
 // WARNING: this file is used by both the client and the server.
 // Do not use any browser or node-specific API!
 // -------------------------------------------------------------
-import { Node } from 'estree';
-import transformers from './transformers';
+import { BlockStatement, Node, Program } from 'estree';
+import transformers, { Transformer } from './transformers';
 import jsProtocolLastExpression from './transformers/js-protocol-last-expression';
 import staticImportTransformer from './transformers/static-import';
 import dynamicImportTransformer from './transformers/dynamic-import';
@@ -11,13 +11,14 @@ import replaceNode from './transformers/replace-node';
 import { Syntax } from 'esotope-hammerhead';
 import { parseProxyUrl } from '../../utils/url';
 import { getFirstDestUrl } from '../../utils/stack-processing';
+import { createTempVarsDeclaration } from './node-builder';
+import TempVariables from './transformers/temp-variables';
 
 export interface CodeChange {
     start: number;
     end: number;
-    index: number;
-    parent: Node;
-    key: keyof this['parent'];
+    node: Node;
+    parentType: Node['type'];
 }
 
 class State {
@@ -50,19 +51,16 @@ class State {
 const objectToString = Object.prototype.toString;
 const objectKeys     = Object.keys;
 
-function getChange<T extends Node> (node: Node, parent: T, key: keyof T): CodeChange {
+function getChange (node: Node, parentType: Node['type']): CodeChange {
     /*eslint-disable @typescript-eslint/no-non-null-assertion*/
     const start = node.originStart!;
     const end   = node.originEnd!;
-    const nodes = parent[key];
-    const index = nodes instanceof Array ? nodes.indexOf(node) : -1;
     /*eslint-disable @typescript-eslint/no-non-null-assertion*/
 
-    // @ts-ignore
-    return { start, end, index, parent, key };
+    return { start, end, node, parentType };
 }
 
-function transformChildNodes (node: Node, changes: CodeChange[], state: State) {
+function transformChildNodes (node: Node, changes: CodeChange[], state: State, tempVars: TempVariables) {
     // @ts-ignore
     const nodeKeys: (keyof Node)[] = objectKeys(node);
 
@@ -74,12 +72,15 @@ function transformChildNodes (node: Node, changes: CodeChange[], state: State) {
             // @ts-ignore
             const childNodes = childNode as Node[];
 
-            for (const nthNode of childNodes)
-                transform(nthNode, changes, state, node, key);
+            for (const nthNode of childNodes) {
+                // NOTE: Some items of ArrayExpression can be null
+                if (nthNode)
+                    transform(nthNode, changes, state, node, key, tempVars);
+            }
         }
         else if (stringifiedNode === '[object Object]') {
             // @ts-ignore
-            transform(childNode!, changes, state, node, key);
+            transform(childNode!, changes, state, node, key, tempVars);
         }
     }
 }
@@ -88,7 +89,7 @@ function isNodeTransformed (node: Node): boolean {
     return node.originStart !== void 0 && node.originEnd !== void 0;
 }
 
-function addChangeForTransformedNode<T extends Node> (state: State, changes: CodeChange[], replacement: Node, parent: T, key: keyof T) {
+function addChangeForTransformedNode (state: State, changes: CodeChange[], replacement: Node, parentType: Node['type']) {
     const hasTransformedAncestor = state.hasTransformedAncestor ||
                                    state.newExpressionAncestor && isNodeTransformed(state.newExpressionAncestor);
 
@@ -97,13 +98,25 @@ function addChangeForTransformedNode<T extends Node> (state: State, changes: Cod
 
     if (state.newExpressionAncestor) {
         replaceNode(state.newExpressionAncestor, state.newExpressionAncestor, state.newExpressionAncestorParent!, state.newExpressionAncestorKey!);
-        changes.push(getChange(state.newExpressionAncestor, state.newExpressionAncestorParent!, state.newExpressionAncestorKey!));
+        changes.push(getChange(state.newExpressionAncestor, state.newExpressionAncestorParent.type));
     }
     else
-        changes.push(getChange(replacement, parent, key));
+        changes.push(getChange(replacement, parentType));
 }
 
-export function beforeTransform (wrapLastExprWithProcessHtml: boolean = false, resolver?: Function) {
+function addTempVarsDeclaration (node: BlockStatement | Program, changes: CodeChange[], state: State, tempVars: TempVariables) {
+    const names = tempVars.get();
+
+    if (!names.length)
+        return;
+
+    const declaration = createTempVarsDeclaration(names);
+
+    replaceNode(null, declaration, node, 'body');
+    addChangeForTransformedNode(state, changes, declaration, node.type);
+}
+
+function beforeTransform (wrapLastExprWithProcessHtml: boolean = false, resolver?: Function) {
     jsProtocolLastExpression.wrapLastExpr = wrapLastExprWithProcessHtml;
     staticImportTransformer.resolver = resolver;
 
@@ -122,62 +135,80 @@ export function beforeTransform (wrapLastExprWithProcessHtml: boolean = false, r
         dynamicImportTransformer.baseUrl = parseProxyUrl(resolver('./'))!.destUrl;
 }
 
-export function afterTransform () {
+function afterTransform () {
     jsProtocolLastExpression.wrapLastExpr = false;
-    staticImportTransformer.resolver = void 0;
-    dynamicImportTransformer.baseUrl = void 0;
+    staticImportTransformer.resolver      = void 0;
+    dynamicImportTransformer.baseUrl      = void 0;
 }
 
-/* eslint-disable @typescript-eslint/indent */
-export default function transform<T extends Node> (node: Node,
-                                                   changes: CodeChange[] = [],
-                                                   state: State = new State(),
-                                                   parent?: T,
-                                                   key?: keyof T,
-                                                   reTransform?: boolean): CodeChange[] {
-    /* eslint-enable @typescript-eslint/indent */
+function findTransformer (node: Node, parent: Node): Transformer<any> | null {
+    const nodeTransformers = transformers.get(node.type);
 
-    if (!node || typeof node !== 'object')
-        return changes;
-
-    let nodeChanged = false;
-
-    if (isNodeTransformed(node) && !reTransform) {
-        addChangeForTransformedNode(state, changes, node, parent!, key!);
-        nodeChanged = true;
+    if (nodeTransformers) {
+        for (const transformer of nodeTransformers) {
+            if (transformer.condition(node, parent))
+                return transformer;
+        }
     }
 
-    else if (transformers.has(node.type)) {
-        const nodeTransformers = transformers.get(node.type)!;
+    return null;
+}
 
-        for (const transformer of nodeTransformers) {
-            if (!transformer.condition(node, parent))
-                continue;
+function transform<T extends Node> (node: Node, changes: CodeChange[], state: State, parent: T, key: keyof T, tempVars: TempVariables) {
+    const allowTempVarAdd = node.type === Syntax.BlockStatement;
+    let nodeTransformed   = false;
 
-            const replacement = transformer.run(node, parent, key);
+    if (allowTempVarAdd)
+        tempVars = new TempVariables();
+
+    if (!node.reTransform && isNodeTransformed(node)) {
+        addChangeForTransformedNode(state, changes, node, parent.type);
+        nodeTransformed = true;
+    }
+    else {
+        let storedNode  = node;
+        let transformer = findTransformer(node, parent);
+        let replacement = null;
+
+        while (transformer) {
+            replacement = transformer.run(replacement || node, parent, key, tempVars);
 
             if (!replacement)
-                continue;
+                break;
 
-            replaceNode(node, replacement, parent!, key!);
-            addChangeForTransformedNode(state, changes, replacement, parent!, key!);
-
-            nodeChanged = true;
+            nodeTransformed = true;
 
             if (!transformer.nodeReplacementRequireTransform)
                 break;
 
-            state = State.create(state, replacement, parent!, key!, nodeChanged);
+            transformer = findTransformer(replacement, parent);
+            node        = replacement;
+        }
 
-            transform(replacement, changes, state, parent, key, true);
-
-            return changes;
+        if (nodeTransformed) {
+            replaceNode(storedNode, replacement, parent, key);
+            addChangeForTransformedNode(state, changes, replacement, parent.type);
         }
     }
 
-    state = State.create(state, node, parent, key, nodeChanged);
+    state = State.create(state, node, parent, key, nodeTransformed);
 
-    transformChildNodes(node, changes, state);
+    transformChildNodes(node, changes, state, tempVars);
+
+    if (allowTempVarAdd)
+        addTempVarsDeclaration(node as BlockStatement, changes, state, tempVars);
+}
+
+export default function transformProgram(node: Program, wrapLastExprWithProcessHtml: boolean = false, resolver?: Function): CodeChange[] {
+    const changes  = [] as CodeChange[];
+    const state    = new State();
+    const tempVars = new TempVariables();
+
+    TempVariables.resetCounter();
+    beforeTransform(wrapLastExprWithProcessHtml, resolver);
+    transformChildNodes(node, changes, state, tempVars);
+    addTempVarsDeclaration(node, changes, state, tempVars);
+    afterTransform();
 
     return changes;
 }

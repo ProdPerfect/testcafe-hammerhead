@@ -17,6 +17,7 @@ import NodeMutation from './node/mutation';
 import MessageSandbox from './event/message';
 import IframeSandbox from './iframe';
 import IEDebugSandbox from './ie-debug';
+import removeElement from '../utils/remove-element';
 
 const IS_NON_STATIC_POSITION_RE = /fixed|relative|absolute/;
 const CLASSNAME_RE              = /\.((?:\\.|[-\w]|[^\x00-\xa0])+)/g;
@@ -89,7 +90,6 @@ export default class ShadowUI extends SandboxBase {
         };
 
         this.bodyContentChangedEventCallback = (body: HTMLBodyElement) => {
-            // @ts-ignore
             const elContextWindow = body[INTERNAL_PROPS.processedContext];
 
             if (elContextWindow !== window) {
@@ -178,6 +178,9 @@ export default class ShadowUI extends SandboxBase {
                         return nativeCollection;
 
                     if (!nativeCollection[HTML_COLLECTION_WRAPPER])
+                        // NOTE: This changes how the native method behaves. The returned collection will have this wrapper attached
+                        // if the method was called with the same tagName parameter.
+                        // This allows skipping the search if the DOM tree has not changed since the last call.
                         nativeCollection[HTML_COLLECTION_WRAPPER] = new HTMLCollectionWrapper(nativeCollection, tagName);
                     else
                         nativeCollection[HTML_COLLECTION_WRAPPER]._refreshCollection();
@@ -416,7 +419,7 @@ export default class ShadowUI extends SandboxBase {
         return this.root;
     }
 
-    attach (window: Window) {
+    attach (window: Window & typeof globalThis) {
         super.attach(window, window.document);
 
         this.markShadowUIContainers(this.document.head, this.document.body);
@@ -648,11 +651,8 @@ export default class ShadowUI extends SandboxBase {
             '.' + SHADOW_UI_CLASS_NAME.selfRemovingScript);
         const length              = nativeMethods.nodeListLengthGetter.call(selfRemovingScripts);
 
-        for (let i = 0; i < length; i++) {
-            const parent = nativeMethods.nodeParentNodeGetter.call(selfRemovingScripts[i]);
-
-            nativeMethods.removeChild.call(parent, selfRemovingScripts[i]);
-        }
+        for (let i = 0; i < length; i++)
+            removeElement(selfRemovingScripts[i]);
     }
 
     // API
@@ -728,10 +728,15 @@ export default class ShadowUI extends SandboxBase {
     }
 
     insertBeforeRoot (el) {
-        const rootParent      = this.nativeMethods.nodeParentNodeGetter.call(this.getRoot());
+        const rootEl          = this.getRoot()
+        const rootParent      = this.nativeMethods.nodeParentNodeGetter.call(rootEl);
         const lastParentChild = this.nativeMethods.nodeLastChildGetter.call(rootParent);
 
-        return nativeMethods.insertBefore.call(rootParent, el, lastParentChild);
+        // GH-2418
+        if (lastParentChild != rootEl)
+            nativeMethods.appendChild.call(rootParent, rootEl);
+
+        return nativeMethods.insertBefore.call(rootParent, el, rootEl);
     }
 
     static markElementAsShadow (el) {
