@@ -1,0 +1,4 @@
+2020-11-23
+==========
+* Created a branch off of the `p2-16.2.3` branch. This new branch is `p2-17.1.20` and corresponds to 17.1.20 upstream but includes the fixes from `p2-16.2.3` (see below).
+* `p2-16.2.3` corresponds to upstream version 16.2.3 but also includes [this fix](https://github.com/ProdPerfect/testcafe-hammerhead/commit/799d3c3f232af7888106654877fde818c51a74e3)
