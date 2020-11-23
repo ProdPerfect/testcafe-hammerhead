@@ -12,13 +12,16 @@ import INTERNAL_PROPS from '../../../../processing/dom/internal-properties';
 import LocationAccessorsInstrumentation from '../../code-instrumentation/location';
 import { overrideDescriptor, createOverriddenDescriptor } from '../../../utils/property-overriding';
 import NodeSandbox from '../index';
+import { getDestinationUrl } from '../../../utils/url';
+import DocumentTitleStorageInitializer from './title-storage-initializer';
 
 export default class DocumentSandbox extends SandboxBase {
-    documentWriter: any;
+    documentWriter: DocumentWriter;
 
     constructor (private readonly _nodeSandbox: NodeSandbox,
         private readonly _shadowUI: ShadowUI,
-        private readonly _cookieSandbox) {
+        private readonly _cookieSandbox,
+        private readonly _documentTitleStorageInitializer?: DocumentTitleStorageInitializer) {
 
         super();
 
@@ -163,7 +166,7 @@ export default class DocumentSandbox extends SandboxBase {
 
             close: function (...args) {
                 // NOTE: IE11 raise the "load" event only when the document.close method is called. We need to
-                // restore the overriden document.open and document.write methods before Hammerhead injection, if the
+                // restore the overridden document.open and document.write methods before Hammerhead injection, if the
                 // window is not initialized.
                 if (isIE && !IframeSandbox.isWindowInited(window))
                     nativeMethods.restoreDocumentMeths(window, this);
@@ -242,20 +245,14 @@ export default class DocumentSandbox extends SandboxBase {
         if (nativeMethods.documentDocumentURIGetter) {
             overrideDescriptor(docPrototype, 'documentURI', {
                 getter: function () {
-                    const documentURI    = nativeMethods.documentDocumentURIGetter.call(this);
-                    const parsedProxyUrl = urlUtils.parseProxyUrl(documentURI);
-
-                    return parsedProxyUrl ? parsedProxyUrl.destUrl : documentURI;
+                    return getDestinationUrl(nativeMethods.documentDocumentURIGetter.call(this));
                 }
             });
         }
 
         const referrerOverriddenDescriptor = createOverriddenDescriptor(docPrototype, 'referrer', {
             getter: function () {
-                const referrer       = nativeMethods.documentReferrerGetter.call(this);
-                const parsedProxyUrl = urlUtils.parseProxyUrl(referrer);
-
-                return parsedProxyUrl ? parsedProxyUrl.destUrl : '';
+                return getDestinationUrl(nativeMethods.documentReferrerGetter.call(this));
             }
         });
 
@@ -322,5 +319,16 @@ export default class DocumentSandbox extends SandboxBase {
                 return documentSandbox._shadowUI._filterNodeList(scripts, length);
             }
         });
+
+        if (this._documentTitleStorageInitializer) {
+            overrideDescriptor(docPrototype, 'title', {
+                getter: function () {
+                    return documentSandbox._documentTitleStorageInitializer.storage.getTitle();
+                } ,
+                setter: function (value) {
+                    documentSandbox._documentTitleStorageInitializer.storage.setTitle(value);
+                }
+            });
+        }
     }
 }

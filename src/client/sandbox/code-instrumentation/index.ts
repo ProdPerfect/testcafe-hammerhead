@@ -25,7 +25,7 @@ export default class CodeInstrumentation extends SandboxBase {
         this._propertyAccessorsInstrumentation = new PropertyAccessorsInstrumentation();
     }
 
-    attach (window: Window) {
+    attach (window: Window & typeof globalThis) {
         super.attach(window);
 
         this._methodCallInstrumentation.attach(window);
@@ -101,6 +101,27 @@ export default class CodeInstrumentation extends SandboxBase {
                     urlResolver.updateBase(storedBaseUrl, this.document);
 
                 return proxyUrl;
+            },
+
+            configurable: true
+        });
+
+        nativeMethods.objectDefineProperty(window, INSTRUCTION.restArray, {
+            value:        (array: any[], startIndex: number) => nativeMethods.arraySlice.call(array, startIndex),
+            configurable: true
+        });
+
+        nativeMethods.objectDefineProperty(window, INSTRUCTION.restObject, {
+            value: (obj: object, excludeProps: string[]) => {
+                const rest = {};
+                const keys = nativeMethods.objectKeys(obj);
+
+                for (const key of keys) {
+                    if (excludeProps.indexOf(key) < 0)
+                        rest[key] = obj[key];
+                }
+
+                return rest;
             },
 
             configurable: true

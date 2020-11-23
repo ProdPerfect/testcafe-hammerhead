@@ -8,7 +8,7 @@ import { Identifier } from 'estree';
 import { Transformer } from './index';
 /*eslint-enable no-unused-vars*/
 import INSTRUCTION from '../instruction';
-import { createGetEvalMethCall } from '../node-builder';
+import { createGetEvalMethodCall } from '../node-builder';
 import { Syntax } from 'esotope-hammerhead';
 
 // Transform:
@@ -75,13 +75,21 @@ const transformer: Transformer<Identifier> = {
             if (parent.type === Syntax.RestElement)
                 return false;
 
+            // Skip: export { eval } from "module";
+            if (parent.type === Syntax.ExportSpecifier)
+                return false;
+
+            // Skip: import { eval } from "module";
+            if (parent.type === Syntax.ImportSpecifier)
+                return false;
+
             return true;
         }
 
         return false;
     },
 
-    run: createGetEvalMethCall
+    run: createGetEvalMethodCall
 };
 
 export default transformer;

@@ -1,15 +1,15 @@
-// @ts-ignore
 import mime from 'mime';
 import { EventEmitter } from 'events';
 import { parse } from 'url';
 import { MESSAGE, getText } from '../../messages';
 import createResource from './create-resource';
+import BUILTIN_HEADERS from '../builtin-header-names';
 
 const DISK_RE = /^\/[A-Za-z]:/;
 
 export default class FileRequest extends EventEmitter {
-    private _url: string;
-    private _path: string;
+    private readonly _url: string;
+    private readonly _path: string;
 
     constructor (url: string) {
         super();
@@ -39,7 +39,7 @@ export default class FileRequest extends EventEmitter {
     }
 
     private _onError (err: Error) {
-        this.emit('fatalError', getText(MESSAGE.cantReadFile, this._url, err.message));
+        this.emit('fatalError', getText(MESSAGE.cantReadFile, { url: this._url, message: err.message }));
     }
 
     private _onOpen (contentStream: any) {
@@ -48,9 +48,7 @@ export default class FileRequest extends EventEmitter {
         stream = Object.assign(stream, {
             statusCode: 200,
             trailers:   {},
-            headers:    {
-                'content-type': mime.lookup(this._path)
-            }
+            headers:    { [BUILTIN_HEADERS.contentType]: mime.lookup(this._path) }
         });
 
         this.emit('response', stream);

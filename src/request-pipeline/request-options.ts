@@ -1,6 +1,7 @@
 import RequestPipelineContext from './context';
 import { Credentials, ExternalProxySettings } from '../typings/session';
 import { IncomingHttpHeaders } from 'http';
+import BUILTIN_HEADERS from './builtin-header-names';
 import * as headerTransforms from './header-transforms';
 import { inject as injectUpload } from '../upload';
 import matchUrl from 'match-url-wildcard';
@@ -15,17 +16,18 @@ export default class RequestOptions {
     method: string;
     credentials: Credentials;
     body: Buffer;
-    isXhr: boolean;
+    isAjax: boolean;
     rawHeaders: string[];
     headers: IncomingHttpHeaders;
     auth: string | void;
+    requestId: string;
     proxy?: ExternalProxySettings;
     agent?: any;
     ecdhCurve?: string;
     rejectUnauthorized?: boolean;
 
     constructor (ctx: RequestPipelineContext) {
-        const bodyWithUploads = injectUpload(ctx.req.headers['content-type'], ctx.reqBody);
+        const bodyWithUploads = injectUpload(ctx.req.headers[BUILTIN_HEADERS.contentType] as string, ctx.reqBody);
 
         // NOTE: First, we should rewrite the request body, because the 'content-length' header will be built based on it.
         if (bodyWithUploads)
@@ -45,9 +47,10 @@ export default class RequestOptions {
         this.method      = ctx.req.method;
         this.credentials = ctx.session.getAuthCredentials();
         this.body        = ctx.reqBody;
-        this.isXhr       = ctx.isXhr;
+        this.isAjax      = ctx.isAjax;
         this.rawHeaders  = ctx.req.rawHeaders;
         this.headers     = headers;
+        this.requestId   = ctx.requestId;
 
         this._applyExternalProxySettings(proxy, ctx, headers);
     }
@@ -65,7 +68,7 @@ export default class RequestOptions {
             this.port     = proxy.port;
 
             if (proxy.authHeader)
-                headers['proxy-authorization'] = proxy.authHeader;
+                headers[BUILTIN_HEADERS.proxyAuthorization] = proxy.authHeader;
         }
     }
 }

@@ -5,7 +5,7 @@ import nativeMethods from '../sandbox/native-methods';
 import * as urlUtils from './url';
 import { get as getStyle } from './style';
 import { sameOriginCheck } from './destination-location';
-import { isFirefox, isWebKit, isIE, isMSEdge, isSafari } from './browser';
+import { isFirefox, isWebKit, isIE, isMSEdge, isSafari, isChrome } from './browser';
 import { getNativeQuerySelectorAll } from './query-selector';
 import { instanceAndPrototypeToStringAreEqual } from './feature-detection';
 
@@ -16,15 +16,16 @@ const NATIVE_MAP_ELEMENT_STRINGS = [
     '[object HTMLAreaElement]'
 ];
 
-const NATIVE_WINDOW_STR                = instanceToString(window);
+const WINDOW_IS_UNDEFINED              = typeof window === 'undefined';
+const NATIVE_WINDOW_STR                = WINDOW_IS_UNDEFINED ? '' : instanceToString(window);
 const IS_DOCUMENT_RE                   = /^\[object .*?Document]$/i;
 const IS_PROCESSING_INSTRUCTION_RE     = /^\[object .*?ProcessingInstruction]$/i;
 const IS_SVG_ELEMENT_RE                = /^\[object SVG\w+?Element]$/i;
 const IS_HTML_ELEMENT_RE               = /^\[object HTML.*?Element]$/i;
 const IS_ARRAY_BUFFER_RE               = /^\[object ArrayBuffer]$/i;
 const IS_DATA_VIEW_RE                  = /^\[object DataView]$/i;
-const NATIVE_TABLE_CELL_STR            = instanceToString(nativeMethods.createElement.call(document, 'td'));
-const ELEMENT_NODE_TYPE                = Node.ELEMENT_NODE;
+const NATIVE_TABLE_CELL_STR            = WINDOW_IS_UNDEFINED ? '' : instanceToString(nativeMethods.createElement.call(document, 'td'));
+const ELEMENT_NODE_TYPE                = WINDOW_IS_UNDEFINED ? -1 : Node.ELEMENT_NODE;
 const NOT_CONTENT_EDITABLE_ELEMENTS_RE = /^(select|option|applet|area|audio|canvas|datalist|keygen|map|meter|object|progress|source|track|video|img)$/;
 const INPUT_ELEMENTS_RE                = /^(input|textarea|button)$/;
 const SCRIPT_OR_STYLE_RE               = /^(script|style)$/i;
@@ -57,8 +58,10 @@ function isLocationByProto (instance: any): boolean {
     }
     catch (e) {
         // NOTE: Try to detect cross-domain window location.
-        // A cross-domain location has no the "assign" function in Safari.
-        return instance.replace && (isSafari || !!instance.assign);
+        // A cross-domain location has no the "assign" function in Safari and Chrome.
+        const shouldNotHaveAssign = isSafari || isChrome;
+
+        return instance.replace && (shouldNotHaveAssign || !!instance.assign);
     }
 
     if (!instanceCtor)
@@ -148,9 +151,9 @@ export function getIframeLocation (iframe) {
     };
 }
 
-export function getFrameElement (win: Window): (HTMLFrameElement | HTMLIFrameElement) | null {
+export function getFrameElement (win: Window): HTMLFrameElement | HTMLIFrameElement | null {
     try {
-        return win.frameElement as (HTMLFrameElement | HTMLIFrameElement);
+        return win.frameElement as HTMLFrameElement | HTMLIFrameElement;
     }
     catch (e) {
         return null;
@@ -402,8 +405,20 @@ export function isInputElement (el: any): el is HTMLInputElement {
     return instanceToString(el) === '[object HTMLInputElement]';
 }
 
+export function isTitleElement (el: any): el is HTMLTitleElement {
+    return instanceToString(el) === '[object HTMLTitleElement]';
+}
+
 export function isButtonElement (el: any): el is HTMLButtonElement {
     return instanceToString(el) === '[object HTMLButtonElement]';
+}
+
+export function isFieldSetElement (el: any): el is HTMLFieldSetElement {
+    return instanceToString(el) === '[object HTMLFieldSetElement]';
+}
+
+export function isOptGroupElement (el: any): el is HTMLOptGroupElement {
+    return instanceToString(el) === '[object HTMLOptGroupElement]';
 }
 
 export function isHtmlElement (el: any): el is HTMLHtmlElement {
@@ -586,7 +601,7 @@ export function isLocation (instance: any): instance is Location {
     if (!instance)
         return false;
 
-    if (isIE || isSafari)
+    if (isIE || isSafari || isChrome)
         return isLocationByProto(instance);
 
     return instance instanceof nativeMethods.locationClass ||
@@ -816,5 +831,10 @@ export function isNumberOrEmailInput (el): boolean {
 }
 
 export function isInputWithoutSelectionProperties (el): boolean {
-    return isNumberOrEmailInput(el) && (isWebKit || isFirefox);
+    if (!isNumberOrEmailInput(el))
+        return false;
+
+    const hasSelectionProperties = typeof el.selectionStart === 'number' && typeof el.selectionEnd === 'number';
+
+    return !hasSelectionProperties;
 }

@@ -17,7 +17,7 @@ import {
 } from '../../../../utils/url';
 import nativeMethods from '../../native-methods';
 import urlResolver from '../../../utils/url-resolver';
-import DomProcessor from '../../../../processing/dom/index';
+import DomProcessor from '../../../../processing/dom';
 import DOMStringListWrapper from './ancestor-origins-wrapper';
 import IntegerIdGenerator from '../../../utils/integer-id-generator';
 import { createOverriddenDescriptor } from '../../../utils/property-overriding';
@@ -36,7 +36,7 @@ function getLocationUrl (window: Window): string | undefined {
 }
 
 export default class LocationWrapper {
-    constructor (window: Window, messageSandbox?: MessageSandbox, onChanged?: Function) {
+    constructor (window: Window, messageSandbox: MessageSandbox, onChanged: Function) {
         const parsedLocation         = parseProxyUrl(getLocationUrl(window) as string);
         const locationResourceType   = parsedLocation ? parsedLocation.resourceType : '';
         const parsedResourceType     = parseResourceType(locationResourceType);
@@ -156,20 +156,22 @@ export default class LocationWrapper {
                 messageSandbox.sendServiceMsg({ id, cmd: GET_ORIGIN_CMD }, win);
             };
 
-            messageSandbox.on(messageSandbox.SERVICE_MSG_RECEIVED_EVENT, ({ message, source }) => {
-                if (message.cmd === GET_ORIGIN_CMD) {
-                    // @ts-ignore
-                    messageSandbox.sendServiceMsg({ id: message.id, cmd: ORIGIN_RECEIVED_CMD, origin: this.origin }, source);// eslint-disable-line no-restricted-properties
-                }
-                else if (message.cmd === ORIGIN_RECEIVED_CMD) {
-                    const callback = callbacks[message.id];
+            if (messageSandbox) {
+                messageSandbox.on(messageSandbox.SERVICE_MSG_RECEIVED_EVENT, ({ message, source }) => {
+                    if (message.cmd === GET_ORIGIN_CMD) {
+                        // @ts-ignore
+                        messageSandbox.sendServiceMsg({ id: message.id, cmd: ORIGIN_RECEIVED_CMD, origin: this.origin }, source);// eslint-disable-line no-restricted-properties
+                    }
+                    else if (message.cmd === ORIGIN_RECEIVED_CMD) {
+                        const callback = callbacks[message.id];
 
-                    if (callback)
-                        callback(message.origin); // eslint-disable-line no-restricted-properties
-                }
-            });
+                        if (callback)
+                            callback(message.origin); // eslint-disable-line no-restricted-properties
+                    }
+                });
+            }
 
-            const ancestorOrigins = new DOMStringListWrapper(window, getCrossDomainOrigin);
+            const ancestorOrigins = new DOMStringListWrapper(window, messageSandbox ? getCrossDomainOrigin : void 0);
 
             locationProps.ancestorOrigins = createOverriddenDescriptor(locationPropsOwner, 'ancestorOrigins', {
                 getter: () => ancestorOrigins

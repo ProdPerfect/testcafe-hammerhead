@@ -70,7 +70,7 @@ describe('Upload', () => {
 
             expect(entry.name).eql('upload');
             expect(entry.fileName).eql('plain.txt');
-            expect(entry._headers['Content-Type']).eql('text/plain');
+            expect(entry._headers.get('content-type')).eql({ rawName: 'Content-Type', value: 'text/plain' });
             expect(body).eql('I am a plain text file\r\n');
         });
 
@@ -87,7 +87,7 @@ describe('Upload', () => {
 
             expect(entry1.name).eql('upload');
             expect(entry1.fileName).eql(': \\ ? % * | &#9731; %22 < > . ? ; \' @ # $ ^ & ( ) - _ = + { } [ ] ` ~.txt');
-            expect(entry1._headers['Content-Type']).eql('text/plain');
+            expect(entry1._headers.get('content-type')).eql({ rawName: 'Content-Type', value: 'text/plain' });
             expect(body1).eql('I am a text file with a funky name!\r\n');
         });
 
@@ -98,7 +98,7 @@ describe('Upload', () => {
 
             expect(entry.name).eql('upload');
             expect(entry.fileName).to.be.empty;
-            expect(entry._headers['Content-Type']).eql('text/plain');
+            expect(entry._headers.get('content-type')).eql({ rawName: 'Content-Type', value: 'text/plain' });
             expect(body).eql('I am a plain text file\r\n');
         });
 
@@ -111,7 +111,7 @@ describe('Upload', () => {
             expect(formData._preamble[0].toString()).eql('This is a preamble which should be ignored');
             expect(entry.name).eql('upload');
             expect(entry.fileName).eql('plain.txt');
-            expect(entry._headers['Content-Type']).eql('text/plain');
+            expect(entry._headers.get('content-type')).eql({ rawName: 'Content-Type', value: 'text/plain' });
             expect(body).eql('I am a plain text file\r\n');
         });
 
@@ -124,7 +124,7 @@ describe('Upload', () => {
             expect(formData._preamble[0].toString()).to.be.empty;
             expect(entry.name).eql('upload');
             expect(entry.fileName).eql('plain.txt');
-            expect(entry._headers['Content-Type']).eql('text/plain');
+            expect(entry._headers.get('content-type')).eql({ rawName: 'Content-Type', value: 'text/plain' });
             expect(body).eql('I am a plain text file\r\n');
         });
 
@@ -137,7 +137,7 @@ describe('Upload', () => {
             expect(formData._epilogue[0].toString()).eql('This is a epilogue which should be ignored');
             expect(entry.name).eql('upload');
             expect(entry.fileName).eql('plain.txt');
-            expect(entry._headers['Content-Type']).eql('text/plain');
+            expect(entry._headers.get('content-type')).eql({ rawName: 'Content-Type', value: 'text/plain' });
             expect(body).eql('I am a plain text file\r\n');
         });
 
@@ -148,7 +148,7 @@ describe('Upload', () => {
 
             expect(entry.name).eql('upload');
             expect(entry.fileName).eql('plain.txt');
-            expect(entry._headers['Content-Type']).eql('text/plain');
+            expect(entry._headers.get('content-type')).eql({ rawName: 'Content-Type', value: 'text/plain' });
             expect(body).eql('I am a plain text file\r\n');
         });
 
@@ -159,8 +159,8 @@ describe('Upload', () => {
 
             expect(entry.name).to.be.not.ok;
             expect(entry.fileName).to.be.not.ok;
-            expect(entry._headers['Content-Type']).to.be.empty;
-            expect(entry._headers['Content-Disposition']).to.be.empty;
+            expect(entry._headers.get('content-type')).eql({ rawName: 'Content-Type', value: '' });
+            expect(entry._headers.get('content-disposition')).eql({ rawName: 'Content-Disposition', value: '' });
             expect(body).eql('text');
         });
 
@@ -252,6 +252,7 @@ describe('Upload', () => {
             expect(fileInfo.info.name).eql(fileName);
             expect(fileInfo.info.type).eql(mime.lookup(filePath));
             expect(fileInfo.info.lastModifiedDate).eql(fs.statSync(filePath).mtime);
+            expect(fileInfo.info.lastModified).eql(fs.statSync(filePath).mtimeMs);
         }
 
         it('Should store and get file', () => {
@@ -427,6 +428,14 @@ describe('Upload', () => {
                     fs.unlinkSync(getStoredFilePath('expected.formdata'));
                     fs.unlinkSync(copiedFilePath);
                 });
+        });
+
+        it('Should remove duplicated upload roots', () => {
+            const storage = new UploadStorage(['/folder/1', '/folder/2', '/folder/1']);
+
+            expect(storage.uploadRoots.length).eql(2);
+            expect(storage.uploadRoots[0]).eql('/folder/1');
+            expect(storage.uploadRoots[1]).eql('/folder/2');
         });
     });
 

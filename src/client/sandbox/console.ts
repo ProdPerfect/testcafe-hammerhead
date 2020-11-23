@@ -27,7 +27,6 @@ export default class ConsoleSandbox extends SandboxBase {
     }
 
     private _proxyConsoleMeth (meth: string): void {
-        //@ts-ignore
         this.window.console[meth] = (...args: any[]) => {
             if (!isCrossDomainWindows(window, window.top)) {
                 const sendToTopWindow = window !== window.top;
@@ -45,7 +44,7 @@ export default class ConsoleSandbox extends SandboxBase {
         };
     }
 
-    attach (window: Window) {
+    attach (window: Window & typeof globalThis) {
         super.attach(window);
 
         this._proxyConsoleMeth('log');

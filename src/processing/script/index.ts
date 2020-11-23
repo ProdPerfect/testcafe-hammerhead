@@ -3,7 +3,7 @@
 // Do not use any browser or node-specific API!
 // -------------------------------------------------------------
 import { Program, Node } from 'estree';
-import transform, { CodeChange, beforeTransform, afterTransform } from './transform';
+import transform, { CodeChange } from './transform';
 import INSTRUCTION from './instruction';
 import { add as addHeader, remove as removeHeader } from './header';
 import { parse } from 'acorn-hammerhead';
@@ -140,18 +140,19 @@ function applyChanges (script: string, changes: CodeChange[], isObject: boolean)
     if (!changes.length)
         return script;
 
-    changes.sort((a, b) => a.start - b.start);
+    changes.sort((a, b) => (a.start - b.start) || (a.end - b.end));
 
     for (const change of changes) {
         const changeStart = change.start + indexOffset;
         const changeEnd   = change.end + indexOffset;
-        const nodeOrNodes = change.parent[change.key];
-        // @ts-ignore
-        const replacement = change.index > -1 ? nodeOrNodes[change.index] as Node : nodeOrNodes as Node;
+        const parentheses = change.node.type === Syntax.SequenceExpression &&
+            change.parentType !== Syntax.ExpressionStatement &&
+            change.parentType !== Syntax.SequenceExpression;
 
         chunks.push(script.substring(index, changeStart));
-        chunks.push(' ');
-        chunks.push(getCode(replacement, script.substring(changeStart, changeEnd)));
+        chunks.push(parentheses ? '(' : ' ');
+        chunks.push(getCode(change.node, script.substring(changeStart, changeEnd)));
+        chunks.push(parentheses ? ')' : ' ');
         index += changeEnd - index;
     }
 
@@ -164,7 +165,7 @@ export function isScriptProcessed (code: string): boolean {
     return PROCESSED_SCRIPT_RE.test(code);
 }
 
-export function processScript (src: string, withHeader: boolean = false, wrapLastExprWithProcessHtml: boolean = false, resolver?: Function): string {
+export function processScript (src: string, withHeader = false, wrapLastExprWithProcessHtml = false, resolver?: Function): string {
     const { bom, preprocessed } = preprocess(src);
     const withoutHtmlComments   = removeHtmlComments(preprocessed);
     const { ast, isObject }     = analyze(withoutHtmlComments);
@@ -174,11 +175,7 @@ export function processScript (src: string, withHeader: boolean = false, wrapLas
 
     withHeader = withHeader && !isObject && !isArrayDataScript(ast);
 
-    beforeTransform(wrapLastExprWithProcessHtml, resolver);
-
-    const changes = transform(ast);
-
-    afterTransform();
+    const changes = transform(ast, wrapLastExprWithProcessHtml, resolver);
 
     let processed = changes.length ? applyChanges(withoutHtmlComments, changes, isObject) : preprocessed;
 

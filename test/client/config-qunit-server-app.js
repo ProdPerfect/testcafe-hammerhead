@@ -86,6 +86,12 @@ module.exports = function (app) {
             .send(fs.readFileSync('./lib/client/transport-worker.js').toString().replace(patchRegExp, patchPattern));
     });
 
+    app.get('/worker-hammerhead.js', function (req, res) {
+        res
+            .set('content-type', 'application/javascript')
+            .send(fs.readFileSync('./lib/client/worker-hammerhead.js'));
+    });
+
     app.post('/service-msg', function (req, res) {
         fetchContent(req)
             .then(body => {
@@ -110,7 +116,7 @@ module.exports = function (app) {
     });
 
     app.post('/xhr-origin-header-test/', function (req, res) {
-        res.send(req.headers['x-hammerhead|xhr|origin']);
+        res.send(req.headers['x-hammerhead-origin']);
     });
 
     app.get('/xhr-with-sync-cookie/', function (req, res) {
@@ -153,6 +159,16 @@ module.exports = function (app) {
 
     app.all('/echo-request-headers', function (req, res) {
         res.json(req.headers);
+    });
+
+    app.post('/echo-request-body-in-response-headers', function (req, res) {
+        fetchContent(req)
+            .then(body => {
+                var headers = JSON.parse(body);
+
+                res.writeHead(200, headers);
+                res.end();
+            });
     });
 
     app.post('/set-cookie-msg/', function (req, res) {

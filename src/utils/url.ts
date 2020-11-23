@@ -5,6 +5,7 @@
 
 import trim from './string-trim';
 import { ParsedUrl, ResourceType, RequestDescriptor, ParsedProxyUrl, ProxyUrlOptions } from '../typings/url';
+import { ServerInfo } from '../typings/proxy';
 
 const PROTOCOL_RE        = /^([\w-]+?:)(\/\/|[^\\/]|$)/;
 const LEADING_SLASHES_RE = /^(\/\/)/;
@@ -12,7 +13,7 @@ const HOST_RE            = /^(.*?)(\/|%|\?|;|#|$)/;
 const PORT_RE            = /:([0-9]*)$/;
 const QUERY_AND_HASH_RE  = /(\?.+|#[^#]*)$/;
 const PATH_AFTER_HOST_RE = /^\/([^/]+?)\/([\S\s]+)$/;
-const HTTP_RE            = /^(?:https?):/;
+const HTTP_RE            = /^https?:/;
 const FILE_RE            = /^file:/i;
 
 export const SUPPORTED_PROTOCOL_RE                            = /^(?:https?|file):/i;
@@ -337,7 +338,6 @@ export function resolveUrlAsDest (url: string, getProxyUrlMeth: Function): strin
 export function formatUrl (parsedUrl: ParsedUrl): string {
     // NOTE: the URL is relative.
     if (parsedUrl.protocol !== 'file:' && !parsedUrl.host && (!parsedUrl.hostname || !parsedUrl.port))
-        //@ts-ignore
         return parsedUrl.partAfterHost;
 
     let url = parsedUrl.protocol || '';
@@ -457,4 +457,12 @@ export function prepareUrl (url: string): string {
     url = ensureOriginTrailingSlash(url);
 
     return url;
+}
+
+export function updateScriptImportUrls (cachedScript: string, serverInfo: ServerInfo, sessionId: string, windowId?: string) {
+    const regExp  = new RegExp('(' + serverInfo.protocol + '//' + serverInfo.hostname + ':(?:' + serverInfo.port + '|' +
+        serverInfo.crossDomainPort + ')/)[^/' + REQUEST_DESCRIPTOR_VALUES_SEPARATOR + ']+', 'g');
+    const pattern = '$1' + sessionId + (windowId ? REQUEST_DESCRIPTOR_SESSION_INFO_VALUES_SEPARATOR + windowId : '');
+
+    return cachedScript.replace(regExp, pattern);
 }

@@ -15,6 +15,26 @@ import ConfigureResponseEventOptions from '../session/events/configure-response-
 import { toReadableStream } from '../utils/buffer';
 import { PassThrough } from 'stream';
 import { getText, MESSAGE } from '../messages';
+import logger from '../utils/logger';
+import { getFormattedInvalidCharacters } from './http-header-parser';
+
+// An empty line that indicates the end of the header section
+// https://tools.ietf.org/html/rfc7230#section-3
+const HTTP_BODY_SEPARATOR = '\r\n\r\n';
+
+// Used to calculate the recommended maximum header size
+// See getRecommendedMaxHeaderSize() below
+const HEADER_SIZE_MULTIPLIER            = 2;
+const HEADER_SIZE_CALCULATION_PRECISION = 2;
+
+// Calculates the HTTP header size in bytes that a customer should specify via the
+// --max-http-header-size Node option so that the proxy can process the site
+// https://nodejs.org/api/cli.html#cli_max_http_header_size_size
+// Example: 
+// (8211 * 2).toPrecision(2) -> 16 * 10^3 -> 16000
+function getRecommendedMaxHeaderSize (currentHeaderSize: number): number {
+    return Number((currentHeaderSize * HEADER_SIZE_MULTIPLIER).toPrecision(HEADER_SIZE_CALCULATION_PRECISION));
+}
 
 export function sendRequest (ctx: RequestPipelineContext) {
     return new Promise(resolve => {
@@ -40,15 +60,26 @@ export function sendRequest (ctx: RequestPipelineContext) {
         req.on('error', err => {
             // NOTE: Sometimes the underlying socket emits an error event. But if we have a response body,
             // we can still process such requests. (B234324)
-            if (ctx.isDestResBodyMalformed()) {
-                error(ctx, getText(MESSAGE.destConnectionTerminated, ctx.dest.url, err.toString()));
-                ctx.goToNextStage = false;
+            if (!ctx.isDestResReadableEnded) {
+                const rawHeadersStr = err.rawPacket ? err.rawPacket.asciiSlice().split(HTTP_BODY_SEPARATOR)[0].split('\n').splice(1).join('\n') : '';
+                const headerSize = rawHeadersStr.length;
+
+                error(ctx, getText(MESSAGE.destConnectionTerminated, {
+                    url:                      ctx.dest.url,
+                    message:                  MESSAGE.nodeError[err.code] || err.toString(),
+                    headerSize:               headerSize,
+                    recommendedMaxHeaderSize: getRecommendedMaxHeaderSize(headerSize),
+                    invalidChars:             getFormattedInvalidCharacters(rawHeadersStr)
+                }));
             }
 
             resolve();
         });
 
         req.on('fatalError', err => {
+            if (ctx.isFileProtocol)
+                logger.destination('File read error %s %o', ctx.requestId, err);
+
             error(ctx, err);
             resolve();
         });
@@ -58,15 +89,17 @@ export function sendRequest (ctx: RequestPipelineContext) {
             resolve();
         });
 
-        if (req instanceof FileRequest)
+        if (req instanceof FileRequest) {
+            logger.destination('Read file %s %s', ctx.requestId, ctx.reqOpts.url);
             req.init();
+        }
     });
 }
 
 export function error (ctx: RequestPipelineContext, err: string) {
     if (ctx.isPage && !ctx.isIframe)
         ctx.session.handlePageError(ctx, err);
-    else if (ctx.isFetch || ctx.isXhr)
+    else if (ctx.isAjax)
         ctx.req.destroy();
     else
         ctx.closeWithError(500, err.toString());

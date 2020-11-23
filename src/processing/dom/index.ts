@@ -9,8 +9,11 @@ import { isScriptProcessed, processScript } from '../script';
 import styleProcessor from '../../processing/style';
 import * as urlUtils from '../../utils/url';
 import trim from '../../utils/string-trim';
+import BUILTIN_HEADERS from '../../request-pipeline/builtin-header-names';
 import { XML_NAMESPACE } from './namespaces';
 import { URL_ATTR_TAGS, URL_ATTRS, TARGET_ATTR_TAGS, TARGET_ATTRS } from './attributes';
+import BaseDomAdapter from './base-dom-adapter';
+import { ASTNode } from 'parse5';
 
 const CDATA_REG_EX                       = /^(\s)*\/\/<!\[CDATA\[([\s\S]*)\/\/\]\]>(\s)*$/;
 const HTML_COMMENT_POSTFIX_REG_EX        = /(\/\/[^\n]*|\n\s*)-->[^\n]*([\n\s]*)?$/;
@@ -29,6 +32,8 @@ const SVG_XLINK_HREF_TAGS = [
 const INTEGRITY_ATTR_TAGS = ['script', 'link'];
 const IFRAME_FLAG_TAGS    = ['a', 'form', 'area', 'input', 'button'];
 
+const PROCESSED_PRELOAD_LINK_CONTENT_TYPE = 'script';
+
 const ELEMENT_PROCESSED = 'hammerhead|element-processed';
 
 const AUTOCOMPLETE_ATTRIBUTE_ABSENCE_MARKER = 'hammerhead|autocomplete-attribute-absence-marker';
@@ -42,17 +47,16 @@ interface ElementProcessingPattern {
 }
 
 export default class DomProcessor {
-    adapter: any;
     SVG_XLINK_HREF_TAGS: string[] = SVG_XLINK_HREF_TAGS;
     AUTOCOMPLETE_ATTRIBUTE_ABSENCE_MARKER: string = AUTOCOMPLETE_ATTRIBUTE_ABSENCE_MARKER;
+    PROCESSED_PRELOAD_LINK_CONTENT_TYPE: string = PROCESSED_PRELOAD_LINK_CONTENT_TYPE;
     private readonly elementProcessorPatterns: ElementProcessingPattern[];
     forceProxySrcForImage: boolean = false;
     allowMultipleWindows: boolean = false;
     // Refactor this, see BaseDomAdapter;
     EVENTS: string[];
 
-    constructor (adapter: any) {
-        this.adapter = adapter;
+    constructor (public readonly adapter: BaseDomAdapter) {
         this.adapter.attachEventEmitter(this);
 
         this.EVENTS = this.adapter.EVENTS;
@@ -83,11 +87,10 @@ export default class DomProcessor {
         if (isJsProtocol)
             value = value.replace(JAVASCRIPT_PROTOCOL_REG_EX, '');
 
-        value = processScript(value, false, isJsProtocol && !isEventAttr);
+        value = processScript(value, false, isJsProtocol && !isEventAttr, void 0);
 
         if (isJsProtocol)
-            // eslint-disable-next-line no-script-url
-            value = 'javascript:' + value;
+            value = 'javascript:' + value; // eslint-disable-line no-script-url
 
         return value;
     }
@@ -104,8 +107,12 @@ export default class DomProcessor {
         return !!tagName && !!relAttr && tagName === 'link' && relAttr === 'import';
     }
 
-    _getRelAttribute (el: HTMLElement): string {
-        return String(this.adapter.getAttr(el, 'rel')).toLocaleLowerCase();
+    _getRelAttribute (el: HTMLElement | ASTNode): string {
+        return String(this.adapter.getAttr(el, 'rel')).toLowerCase();
+    }
+
+    _getAsAttribute (el: HTMLElement): string {
+        return String(this.adapter.getAttr(el, 'as')).toLowerCase();
     }
 
     _createProcessorPatterns (adapter: any): ElementProcessingPattern[] {
@@ -260,6 +267,13 @@ export default class DomProcessor {
     getElementResourceType (el: HTMLElement): string | null {
         const tagName = this.adapter.getTagName(el);
 
+        if (tagName === 'link') {
+            const asAttr = this._getAsAttribute(el);
+
+            if (PROCESSED_PRELOAD_LINK_CONTENT_TYPE === asAttr)
+                return urlUtils.getResourceTypeString({ isScript: true });
+        }
+
         return urlUtils.getResourceTypeString({
             isIframe:     tagName === 'iframe' || tagName === 'frame' || this._isOpenLinkInIframe(el),
             isForm:       tagName === 'form' || tagName === 'input' || tagName === 'button',
@@ -292,7 +306,7 @@ export default class DomProcessor {
         return null;
     }
 
-    getTargetAttr (el: HTMLElement): string | null {
+    getTargetAttr (el: HTMLElement | ASTNode): string | null {
         const tagName = this.adapter.getTagName(el);
 
         for (const targetAttr of TARGET_ATTRS) {
@@ -304,7 +318,7 @@ export default class DomProcessor {
         return null;
     }
 
-    _isOpenLinkInIframe (el: HTMLElement): boolean {
+    _isOpenLinkInIframe (el: HTMLElement | ASTNode): boolean {
         const tagName    = this.adapter.getTagName(el);
         const targetAttr = this.getTargetAttr(el);
         const target     = this.adapter.getAttr(el, targetAttr);
@@ -319,7 +333,7 @@ export default class DomProcessor {
             if (target === '_parent')
                 return mustProcessTag && !this.adapter.isTopParentIframe(el);
 
-            if (mustProcessTag && (this.adapter.hasIframeParent(el) || isNameTarget && this.adapter.isExistingTarget(target)))
+            if (mustProcessTag && (this.adapter.hasIframeParent(el) || isNameTarget && this.adapter.isExistingTarget(target, el)))
                 return true;
         }
 
@@ -427,7 +441,7 @@ export default class DomProcessor {
     _processMetaElement (el: HTMLElement, urlReplacer, pattern: ElementProcessingPattern): void {
         const httpEquivAttrValue = this.adapter.getAttr(el, 'http-equiv').toLowerCase();
 
-        if (httpEquivAttrValue === 'refresh') {
+        if (httpEquivAttrValue === BUILTIN_HEADERS.refresh) {
             let attr = this.adapter.getAttr(el, pattern.urlAttr);
 
             attr = attr.replace(/(url=)(.*)$/i, (_match, prefix, url) => prefix + urlReplacer(url));
@@ -435,7 +449,7 @@ export default class DomProcessor {
             this.adapter.setAttr(el, pattern.urlAttr, attr);
         }
         // TODO: remove after https://github.com/DevExpress/testcafe-hammerhead/issues/244 implementation
-        else if (httpEquivAttrValue === 'content-security-policy') {
+        else if (httpEquivAttrValue === BUILTIN_HEADERS.contentSecurityPolicy) {
             this.adapter.removeAttr(el, 'http-equiv');
             this.adapter.removeAttr(el, 'content');
         }

@@ -1,6 +1,6 @@
 import zlib from 'zlib';
 import { gzip, deflate, gunzip, inflate, inflateRaw } from '../../utils/promisified-functions';
-// @ts-ignore
+import { brotliCompress, brotliDecompress } from './brotli';
 import charsetEncoder from 'iconv-lite';
 import Charset from './charset';
 
@@ -10,7 +10,7 @@ const BROTLI_CONTENT_ENCODING  = 'br';
 
 // NOTE: IIS has a bug when it sends 'raw deflate' compressed data for the 'Deflate' Accept-Encoding header.
 // (see: http://zoompf.com/2012/02/lose-the-wait-http-compression)
-async function inflateWithFallback (data: Buffer) {
+async function inflateWithFallback (data: Buffer): Promise<Buffer> {
     try {
         return await inflate(data);
     }
@@ -22,7 +22,7 @@ async function inflateWithFallback (data: Buffer) {
     }
 }
 
-export async function decodeContent (content: Buffer, encoding: string, charset: Charset) {
+export async function decodeContent (content: Buffer, encoding: string, charset: Charset): Promise<string> {
     if (encoding === GZIP_CONTENT_ENCODING) {
         // NOTE: https://github.com/request/request/pull/2492/files
         // Be more lenient with decoding compressed responses, since (very rarely)
@@ -37,24 +37,24 @@ export async function decodeContent (content: Buffer, encoding: string, charset:
         content = await inflateWithFallback(content);
 
     else if (encoding === BROTLI_CONTENT_ENCODING)
-        content = Buffer.from(require('brotli').decompress(content));
+        content = await brotliDecompress(content);
 
     charset.fromBOM(content);
 
     return charsetEncoder.decode(content, charset.get());
 }
 
-export async function encodeContent (content: string, encoding: string, charset: Charset) {
-    content = charsetEncoder.encode(content, charset.get(), { addBOM: charset.isFromBOM() });
+export async function encodeContent (content: string, encoding: string, charset: Charset): Promise<Buffer> {
+    const encodedContent = charsetEncoder.encode(content, charset.get(), { addBOM: charset.isFromBOM() });
 
     if (encoding === GZIP_CONTENT_ENCODING)
-        return gzip(content);
+        return gzip(encodedContent);
 
     if (encoding === DEFLATE_CONTENT_ENCODING)
-        return deflate(content);
+        return deflate(encodedContent);
 
     if (encoding === BROTLI_CONTENT_ENCODING)
-        return Buffer.from(require('brotli').compress(content));
+        return brotliCompress(encodedContent);
 
-    return content;
+    return encodedContent;
 }

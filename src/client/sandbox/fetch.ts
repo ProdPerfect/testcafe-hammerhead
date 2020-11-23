@@ -1,68 +1,79 @@
 import SandboxBase from './base';
 import nativeMethods from './native-methods';
-import XHR_HEADERS from '../../request-pipeline/xhr/headers';
-import { getProxyUrl, parseProxyUrl } from '../utils/url';
+import INTERNAL_HEADERS from '../../request-pipeline/internal-header-names';
+import BUILTIN_HEADERS from '../../request-pipeline/builtin-header-names';
+import { getProxyUrl, getDestinationUrl } from '../utils/url';
 import { getOriginHeader, sameOriginCheck, get as getDestLocation } from '../utils/destination-location';
 import { isFetchHeaders, isFetchRequest } from '../utils/dom';
 import SAME_ORIGIN_CHECK_FAILED_STATUS_CODE from '../../request-pipeline/xhr/same-origin-check-failed-status-code';
 import { overrideDescriptor } from '../utils/property-overriding';
 import * as browserUtils from '../utils/browser';
+import { transformHeaderNameToBuiltin, transformHeaderNameToInternal } from '../utils/headers';
+import CookieSandbox from './cookie';
 
-const DEFAULT_REQUEST_CREDENTIALS = nativeMethods.Request ? new nativeMethods.Request(window.location.toString()).credentials : void 0;
+const DEFAULT_REQUEST_CREDENTIALS = nativeMethods.Request ? new nativeMethods.Request(location.toString()).credentials : void 0;
 
 export default class FetchSandbox extends SandboxBase {
-    FETCH_REQUEST_SENT_EVENT = 'hammerhead|event|fetch-request-sent-event';
+    readonly FETCH_REQUEST_SENT_EVENT = 'hammerhead|event|fetch-request-sent-event';
 
-    cookieSandbox: any;
-
-    constructor (cookieSandbox) {
+    constructor (readonly cookieSandbox: CookieSandbox) {
         super();
-
-        this.cookieSandbox = cookieSandbox;
     }
 
     static _addSpecialHeadersToRequestInit (init) {
         const credentials = init.credentials || DEFAULT_REQUEST_CREDENTIALS;
         let headers       = init.headers;
 
-        if (!isFetchHeaders(headers))
-            headers = init.headers = headers ? new nativeMethods.Headers(headers) : new nativeMethods.Headers();
+        if (!isFetchHeaders(headers)) {
+            // @ts-ignore
+            headers      = headers ? new nativeMethods.Headers(headers) : new nativeMethods.Headers();
+            init.headers = headers;
+        }
 
         // eslint-disable-next-line no-restricted-properties
-        nativeMethods.headersSet.call(headers, XHR_HEADERS.origin, getOriginHeader());
-        nativeMethods.headersSet.call(headers, XHR_HEADERS.fetchRequestCredentials, credentials);
+        nativeMethods.headersSet.call(headers, INTERNAL_HEADERS.origin, getOriginHeader());
+        nativeMethods.headersSet.call(headers, INTERNAL_HEADERS.credentials, credentials);
+
+        const authorizationValue      = nativeMethods.headersGet.call(headers, BUILTIN_HEADERS.authorization);
+        const proxyAuthorizationValue = nativeMethods.headersGet.call(headers, BUILTIN_HEADERS.proxyAuthorization);
+
+        if (authorizationValue !== null) {
+            nativeMethods.headersSet.call(headers, INTERNAL_HEADERS.authorization, authorizationValue);
+            nativeMethods.headersDelete.call(headers, BUILTIN_HEADERS.authorization);
+        }
+
+        if (proxyAuthorizationValue !== null) {
+            nativeMethods.headersSet.call(headers, INTERNAL_HEADERS.proxyAuthorization, proxyAuthorizationValue);
+            nativeMethods.headersDelete.call(headers, BUILTIN_HEADERS.proxyAuthorization);
+        }
 
         return init;
     }
 
     static _processArguments (args) {
-        const input               = args[0];
+        const [input, init]       = args;
         const inputIsString       = typeof input === 'string';
         const inputIsFetchRequest = isFetchRequest(input);
-        let init                  = args[1];
 
         if (!inputIsFetchRequest) {
             args[0] = getProxyUrl(inputIsString ? input : String(input));
-            init    = init || {};
-            args[1] = FetchSandbox._addSpecialHeadersToRequestInit(init);
+            args[1] = FetchSandbox._addSpecialHeadersToRequestInit(init || {});
         }
         else if (init && init.headers)
             args[1] = FetchSandbox._addSpecialHeadersToRequestInit(init);
     }
 
-    static _sameOriginCheck (args) {
+    static _sameOriginCheck ([input, init]) {
         let url         = null;
         let requestMode = null;
 
-        if (isFetchRequest(args[0])) {
-            url         = parseProxyUrl(args[0].url).destUrl;
-            requestMode = args[0].mode;
+        if (isFetchRequest(input)) {
+            url         = getDestinationUrl(nativeMethods.requestUrlGetter.call(input));
+            requestMode = input.mode;
         }
         else {
-            const parsedProxyUrl = parseProxyUrl(args[0]);
-
-            url         = parsedProxyUrl ? parsedProxyUrl.destUrl : args[0];
-            requestMode = (args[1] || {}).mode;
+            url         = getDestinationUrl(input);
+            requestMode = init && init.mode;
         }
 
         if (requestMode === 'same-origin')
@@ -71,11 +82,17 @@ export default class FetchSandbox extends SandboxBase {
         return true;
     }
 
+    private static _createAccessorWrapper(nativeFn: Function) {
+        return function (...args) {
+            args[0] = transformHeaderNameToInternal(args[0]);
+
+            return nativeFn.apply(this, args);
+        }
+    }
+
     static _getResponseType (response) {
-        const responseUrl       = nativeMethods.responseUrlGetter.call(response);
-        const parsedResponseUrl = parseProxyUrl(responseUrl);
-        const destUrl           = parsedResponseUrl && parsedResponseUrl.destUrl;
-        const isSameOrigin      = sameOriginCheck(getDestLocation(), destUrl);
+        const destUrl      = getDestinationUrl(nativeMethods.responseUrlGetter.call(response));
+        const isSameOrigin = sameOriginCheck(getDestLocation(), destUrl);
 
         if (isSameOrigin)
             return 'basic';
@@ -89,9 +106,13 @@ export default class FetchSandbox extends SandboxBase {
         if (entry.done)
             return entry;
 
+        const headerName = entry.value[0]; // eslint-disable-line no-restricted-properties
+
         // eslint-disable-next-line no-restricted-properties
-        if (entry.value[0] === XHR_HEADERS.origin || entry.value[0] === XHR_HEADERS.fetchRequestCredentials)
+        if (headerName === INTERNAL_HEADERS.origin || headerName === INTERNAL_HEADERS.credentials)
             return FetchSandbox._entriesFilteredNext(iterator, nativeNext);
+
+        entry.value[0] = transformHeaderNameToBuiltin(headerName); // eslint-disable-line no-restricted-properties
 
         return entry;
     }
@@ -144,7 +165,13 @@ export default class FetchSandbox extends SandboxBase {
         };
         window.Request.prototype = nativeMethods.Request.prototype;
 
-        window.fetch = function (...args) {
+        overrideDescriptor(window.Request.prototype, 'url', {
+            getter: function (this: Request) {
+                return getDestinationUrl(nativeMethods.requestUrlGetter.call(this));
+            }
+        });
+
+        window.fetch = function (...args: [Request | string, any]) {
             // NOTE: Safari processed the empty `fetch()` request without `Promise` rejection (GH-1613)
             if (!args.length && !browserUtils.isSafari)
                 return nativeMethods.fetch.apply(this);
@@ -196,10 +223,7 @@ export default class FetchSandbox extends SandboxBase {
 
         overrideDescriptor(window.Response.prototype, 'url', {
             getter: function () {
-                const responseUrl       = nativeMethods.responseUrlGetter.call(this);
-                const parsedResponseUrl = responseUrl && parseProxyUrl(responseUrl);
-
-                return parsedResponseUrl ? parsedResponseUrl.destUrl : responseUrl;
+                return getDestinationUrl(nativeMethods.responseUrlGetter.call(this));
             }
         });
 
@@ -211,14 +235,22 @@ export default class FetchSandbox extends SandboxBase {
             const callback = args[0];
 
             if (typeof callback === 'function') {
-                args[0] = function (_value, name) {
+                args[0] = function (value, name, headers) {
                     // eslint-disable-next-line no-restricted-properties
-                    if (name !== XHR_HEADERS.origin && name !== XHR_HEADERS.fetchRequestCredentials)
-                        callback.apply(this, arguments);
+                    if (name === INTERNAL_HEADERS.origin || name === INTERNAL_HEADERS.credentials)
+                        return;
+
+                    name = transformHeaderNameToBuiltin(name);
+
+                    callback.call(this, value, name, headers);
                 };
             }
 
             return nativeMethods.headersForEach.apply(this, args);
         };
+
+        window.Headers.prototype.get = FetchSandbox._createAccessorWrapper(nativeMethods.headersGet);
+        window.Headers.prototype.set = FetchSandbox._createAccessorWrapper(nativeMethods.headersSet);
+        window.Headers.prototype.has = FetchSandbox._createAccessorWrapper(nativeMethods.headersHas);
     }
 }

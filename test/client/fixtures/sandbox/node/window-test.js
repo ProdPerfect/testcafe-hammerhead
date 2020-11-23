@@ -1,5 +1,6 @@
 var urlUtils     = hammerhead.get('./utils/url');
 var destLocation = hammerhead.get('./utils/destination-location');
+var INSTRUCTION  = hammerhead.get('../processing/script/instruction');
 
 var windowSandox  = hammerhead.sandbox.node.win;
 var nativeMethods = hammerhead.nativeMethods;
@@ -157,12 +158,17 @@ if (nativeMethods.winOnUnhandledRejectionSetter) {
                     return testMsg(new Error('error message'));
                 })
                 .then(function (msg) {
-                    strictEqual(msg, 'error message');
+                    strictEqual(msg, 'Error: error message');
+
+                    return testMsg(new DOMException('You cannot use function', 'SecurityError'));
+                })
+                .then(function (msg) {
+                    strictEqual(msg, 'SecurityError: You cannot use function');
 
                     return testMsg(new TypeError('type error'));
                 })
                 .then(function (msg) {
-                    strictEqual(msg, 'type error');
+                    strictEqual(msg, 'TypeError: type error');
 
                     return testMsg({ a: 1 });
                 })
@@ -340,7 +346,7 @@ test('UNCAUGHT_JS_ERROR_EVENT', function () {
                     stack:   void 0
                 },
             },
-            expectedStack: 'undefined:\n    No stack trace available'
+            expectedStack: 'undefined\n    No stack trace available'
         },
         {
             event: {
@@ -349,23 +355,23 @@ test('UNCAUGHT_JS_ERROR_EVENT', function () {
                     stack:   '    line 1\n    line2'
                 },
             },
-            expectedStack: 'test message:\n    line 1\n    line2'
+            expectedStack: 'test message\n    line 1\n    line2'
         },
         {
             event: {
                 error: {
                     message: 'test message',
-                    stack:   'Error: test message:\n    line1\n    line2'
+                    stack:   'Error: test message\n    line1\n    line2'
                 },
             },
-            expectedStack: 'Error: test message:\n    line1\n    line2'
+            expectedStack: 'Error: test message\n    line1\n    line2'
         },
         {
             event: {
                 error:   null,
                 message: 'test message'
             },
-            expectedStack: 'test message:\n    No stack trace available'
+            expectedStack: 'test message\n    No stack trace available'
         }
     ];
 
@@ -390,20 +396,30 @@ test('UNCAUGHT_JS_ERROR_EVENT', function () {
 
 if (nativeMethods.winOnUnhandledRejectionSetter) {
     test('UNHANDLED_REJECTION_EVENT', function () {
-        var error = new Error('test');
+        var error = new Error('bla bla bla');
+
+        function prepareStackForError () {
+            // NOTE: Firefox does not include an error message in a stack trace (unlike other browsers)
+            const stack = error.stack;
+
+            if (stack.indexOf(error.message) === -1)
+                return 'Error: bla bla bla\n' + stack;
+
+            return stack;
+        }
 
         var testCases = [
             {
                 reason:        'test reason',
-                expectedStack: 'test reason:\n    No stack trace available'
+                expectedStack: 'test reason\n    No stack trace available'
             },
             {
                 reason:        null,
-                expectedStack: '[object Null]:\n    No stack trace available'
+                expectedStack: '[object Null]\n    No stack trace available'
             },
             {
                 reason:        error,
-                expectedStack: error.stack
+                expectedStack: prepareStackForError(error)
             }
         ];
 
@@ -465,28 +481,6 @@ if (nativeMethods.windowOriginGetter) {
 }
 
 module('regression');
-
-// NOTE: https://connect.microsoft.com/IE/feedback/details/801810/web-workers-from-blob-urls-in-ie-10-and-11
-var isWorkerFromBlobSupported = (function () {
-    try {
-        return !!new Worker(URL.createObjectURL(new Blob(['var a = 42;'])));
-    }
-    catch (e) {
-        return false;
-    }
-})();
-
-if (isWorkerFromBlobSupported) {
-    asyncTest('blob should try to process data as a script even if the content type is not passed (GH-231)', function () {
-        var script  = 'var obj = {}, prop = "prop"; obj[prop] = true; postMessage(true);';
-        var blobURL = URL.createObjectURL(new Blob([script]));
-
-        new Worker(blobURL).onmessage = function (e) {
-            ok(e.data);
-            start();
-        };
-    });
-}
 
 if (window.navigator.sendBeacon) {
     test('Navigator.sendBeacon must be overriden (GH-1035)', function () {
@@ -703,6 +697,35 @@ if (window.Proxy) {
         strictEqual(getProperty(obj, 'proxy'), obj.proxy);
         strictEqual(setProperty(obj.proxy, 'prop1', 1), 1);
         notOk(handledWasCalled);
+    });
+
+    test('any proxy object should return correct code instrumentation instructions (GH-2056)', function () {
+        var proxy = new Proxy({}, {
+            get: function () {
+                return void 0;
+            }
+        });
+
+        strictEqual(proxy[INSTRUCTION.processScript], window[INSTRUCTION.processScript]);
+        strictEqual(proxy[INSTRUCTION.setProperty], window[INSTRUCTION.setProperty]);
+        strictEqual(proxy[INSTRUCTION.getProperty], window[INSTRUCTION.getProperty]);
+
+        eval(window.processScript([
+            'var proxy = new Proxy({ eval: window.eval }, {',
+            '    get: function (target, prop) {',
+            '        return target[prop];',
+            '    },',
+            '    has: function () {',
+            '        return true',
+            '    }',
+            '});',
+            '',
+            'with (proxy) {',
+            '    eval(";");',
+            '}'
+        ].join('\n')));
+
+        ok(true, 'regression check');
     });
 }
 

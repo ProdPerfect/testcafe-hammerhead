@@ -30,8 +30,10 @@ import IframeSandbox from '../iframe';
 import EventSandbox from '../event';
 import ChildWindowSandbox from '../child-window';
 import isKeywordTarget from '../../../utils/is-keyword-target';
+import BUILTIN_HEADERS from '../../../request-pipeline/builtin-header-names';
+import { getDestinationUrl } from '../../utils/url';
 
-const RESTRICTED_META_HTTP_EQUIV_VALUES = ['refresh', 'content-security-policy'];
+const RESTRICTED_META_HTTP_EQUIV_VALUES = [BUILTIN_HEADERS.refresh, BUILTIN_HEADERS.contentSecurityPolicy];
 
 export default class ElementSandbox extends SandboxBase {
     overriddenMethods: any;
@@ -243,7 +245,7 @@ export default class ElementSandbox extends SandboxBase {
             }
 
             if (el[this._nodeSandbox.win.SANDBOX_DOM_TOKEN_LIST_UPDATE_FN])
-                el[this._nodeSandbox.win.SANDBOX_DOM_TOKEN_LIST_UPDATE_FN](value);
+                (el[this._nodeSandbox.win.SANDBOX_DOM_TOKEN_LIST_UPDATE_FN] as Function)(value);
         }
         // TODO: remove after https://github.com/DevExpress/testcafe-hammerhead/issues/244 implementation
         else if (tagName === 'meta' && attr === 'http-equiv') {
@@ -416,8 +418,11 @@ export default class ElementSandbox extends SandboxBase {
         let result          = null;
         let childNodesArray = null;
 
-        if (domUtils.isDocumentFragmentNode(newNode))
-            childNodesArray = domUtils.nodeListToArray(newNode.childNodes);
+        if (domUtils.isDocumentFragmentNode(newNode)) {
+            const childNodes = nativeMethods.nodeChildNodesGetter.call(newNode);
+
+            childNodesArray = domUtils.nodeListToArray(childNodes);
+        }
 
         // NOTE: Before the page's <body> is processed and added to DOM,
         // some javascript frameworks create their own body element, perform
@@ -450,6 +455,13 @@ export default class ElementSandbox extends SandboxBase {
         const sandbox = this;
 
         this.overriddenMethods = {
+            appendData (text) {
+                nativeMethods.nodeTextContentSetter.call(this, nativeMethods.nodeTextContentGetter.call(this) + text);
+
+                if (nativeMethods.nodeParentNodeGetter.call(this))
+                    ElementSandbox._processTextNodeContent(this, nativeMethods.nodeParentNodeGetter.call(this));
+            },
+
             insertRow () {
                 const nativeMeth = domUtils.isTableElement(this)
                     ? nativeMethods.insertTableRow
@@ -638,10 +650,7 @@ export default class ElementSandbox extends SandboxBase {
             },
 
             anchorToString () {
-                const href            = nativeMethods.anchorToString.call(this);
-                const parsedProxyHref = urlUtils.parseProxyUrl(href);
-
-                return parsedProxyHref ? parsedProxyHref.destUrl : href;
+                return getDestinationUrl(nativeMethods.anchorToString.call(this));
             },
 
             registerElement (...args) {
@@ -811,6 +820,7 @@ export default class ElementSandbox extends SandboxBase {
         window.HTMLTableRowElement.prototype.insertCell    = this.overriddenMethods.insertCell;
         window.HTMLFormElement.prototype.submit            = this.overriddenMethods.formSubmit;
         window.HTMLAnchorElement.prototype.toString        = this.overriddenMethods.anchorToString;
+        window.CharacterData.prototype.appendData          = this.overriddenMethods.appendData;
 
         if (window.Document.prototype.registerElement)
             window.Document.prototype.registerElement = this.overriddenMethods.registerElement;

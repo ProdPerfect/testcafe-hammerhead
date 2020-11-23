@@ -4,6 +4,7 @@
 // -------------------------------------------------------------
 
 import { Node } from 'estree';
+import TempVariables from './temp-variables';
 import computedPropertyGetTransformer from './computed-property-get';
 import computedPropertySetTransformer from './computed-property-set';
 import concatOperatorTransformer from './concat-operator';
@@ -16,8 +17,8 @@ import postMessageGetTransformer from './post-message-get';
 import windowPostMessageGetTransformer from './window-post-message-get';
 import postMessageCallApplyTransformer from './post-message-call-apply-bind';
 import forInTransformer from './for-in';
+import forOfTransformer from './for-of';
 import locationGetTransformer from './location-get';
-import locationPropertyGetTransformer from './location-property-get';
 import locationSetTransformer from './location-set';
 import propertyGetTransformer from './property-get';
 import propertySetTransformer from './property-set';
@@ -25,18 +26,26 @@ import methodCallTransformer from './method-call';
 import jsProtocolLastExpression from './js-protocol-last-expression';
 import staticImportTransformer from './static-import';
 import dynamicImportTransformer from './dynamic-import';
+import declarationDestructuring from './declaration-destructuring';
+import assignmentDestructuring from './assignment-destructuring';
+import createFuncArgsDestructing from './func-args-destructing';
+import { Syntax } from 'esotope-hammerhead';
 
 export interface Transformer<C extends Node> {
     nodeReplacementRequireTransform: boolean;
     nodeTypes: C['type'];
     condition: (node: C, parent?: Node) => boolean;
-    run: <P extends Node>(node: C, parent?: P, key?: keyof P) => Node|null;
+    run: <P extends Node>(node: C, parent?: P, key?: keyof P, tempVars?: TempVariables) => Node|null;
     baseUrl?: string;
     wrapLastExpr?: boolean;
     resolver?: Function;
 }
 
 const TRANSFORMERS: Transformer<any>[] = [
+    createFuncArgsDestructing(Syntax.FunctionDeclaration),
+    createFuncArgsDestructing(Syntax.FunctionExpression),
+    createFuncArgsDestructing(Syntax.ArrowFunctionExpression),
+    assignmentDestructuring,
     computedPropertyGetTransformer,
     computedPropertySetTransformer,
     concatOperatorTransformer,
@@ -49,15 +58,16 @@ const TRANSFORMERS: Transformer<any>[] = [
     windowPostMessageGetTransformer,
     postMessageCallApplyTransformer,
     forInTransformer,
+    forOfTransformer,
     locationGetTransformer,
-    locationPropertyGetTransformer,
     locationSetTransformer,
     propertyGetTransformer,
     propertySetTransformer,
     methodCallTransformer,
     jsProtocolLastExpression,
     staticImportTransformer,
-    dynamicImportTransformer
+    dynamicImportTransformer,
+    declarationDestructuring
 ];
 
 function createTransformerMap (): Map<Transformer<Node>['nodeTypes'], Transformer<Node>[]> {

@@ -4,6 +4,7 @@ import * as destLocation from './destination-location';
 import * as urlResolver from './url-resolver';
 import settings from '../settings';
 import { ResourceType } from '../../typings/url';
+import getGlobalContextInfo from './global-context-info';
 
 const HASH_RE                          = /#[\S\s]*$/;
 const SUPPORTED_WEB_SOCKET_PROTOCOL_RE = /^wss?:/i;
@@ -12,7 +13,8 @@ const SUPPORTED_WEB_SOCKET_PROTOCOL_RE = /^wss?:/i;
 // therefore we need to find a window with src to get the proxy settings
 const DEFAULT_PROXY_SETTINGS = (function () {
     /*eslint-disable no-restricted-properties*/
-    let locationWindow = window;
+    const globalCtx    = getGlobalContextInfo();
+    let locationWindow = globalCtx.isInWorker ? { location: parseUrl(self.location.origin), parent: null } : window;
     let proxyLocation  = locationWindow.location;
 
     while (!proxyLocation.hostname) {
@@ -191,11 +193,6 @@ export function getCrossDomainProxyPort (proxyPort: string) {
         : settings.get().crossDomainProxyPort;
 }
 
-export function getCrossDomainProxyUrl () {
-    // eslint-disable-next-line no-restricted-properties
-    return location.protocol + '//' + location.hostname + ':' + settings.get().crossDomainProxyPort + '/';
-}
-
 export function resolveUrlAsDest (url: string) {
     return sharedUrlUtils.resolveUrlAsDest(url, getProxyUrl);
 }
@@ -269,4 +266,10 @@ export function isChangedOnlyHash (currentUrl: string, newUrl: string): boolean 
     // NOTE: we compare proxied urls because urls passed into the function may be proxied, non-proxied
     // or relative. The getProxyUrl function solves all the corresponding problems.
     return getProxyUrl(currentUrl).replace(HASH_RE, '') === getProxyUrl(newUrl).replace(HASH_RE, '');
+}
+
+export function getDestinationUrl (proxyUrl: any) {
+    const parsedProxyUrl = parseProxyUrl(proxyUrl);
+
+    return parsedProxyUrl ? parsedProxyUrl.destUrl : proxyUrl;
 }
