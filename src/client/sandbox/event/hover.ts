@@ -7,7 +7,7 @@ import * as browserUtils from '../../utils/browser';
 import Listeners from './listeners';
 
 export default class HoverSandbox extends SandboxBase {
-    private _hoverElementFixed: boolean = false;
+    private _hoverElementFixed = false;
     private _lastHoveredElement: any = null;
 
     constructor (private readonly _listeners: Listeners) { //eslint-disable-line no-unused-vars
@@ -85,7 +85,7 @@ export default class HoverSandbox extends SandboxBase {
     attach (window: Window & typeof globalThis) {
         super.attach(window);
 
-        this._listeners.addInternalEventListener(window, ['mouseover', 'touchstart'], e => this._onHover(e));
+        this._listeners.addInternalEventBeforeListener(window, ['mouseover', 'touchstart'], e => this._onHover(e));
     }
 
     dispose () {

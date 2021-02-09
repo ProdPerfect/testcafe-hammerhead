@@ -6,7 +6,7 @@ import { getTopSameDomainWindow } from '../../utils/dom';
 import getStorageKey from '../../../utils/get-storage-key';
 import INTERNAL_PROPS from '../../../processing/dom/internal-properties';
 import * as JSON from 'json-hammerhead';
-import { createOverriddenDescriptor } from '../../utils/property-overriding';
+import { createOverriddenDescriptor } from '../../utils/overriding';
 import hammerhead from '../../index';
 import Listeners from '../event/listeners';
 import UnloadSandbox from '../event/unload';
@@ -59,10 +59,8 @@ export default class StorageSandbox extends SandboxBase {
         }
         // NOTE: Or create new.
         else {
-            // @ts-ignore
-            this.localStorageWrapper   = new StorageWrapper(this.window, this.nativeMethods.winLocalStorageGetter.call(this.window), storageKey);
-            // @ts-ignore
-            this.sessionStorageWrapper = new StorageWrapper(this.window, this.nativeMethods.winSessionStorageGetter.call(this.window), storageKey);
+            this.localStorageWrapper   = StorageWrapper.create(this.window, this.nativeMethods.winLocalStorageGetter.call(this.window), storageKey);
+            this.sessionStorageWrapper = StorageWrapper.create(this.window, this.nativeMethods.winSessionStorageGetter.call(this.window), storageKey);
 
             const saveToNativeStorages = () => {
                 if (!this.isLocked) {
@@ -71,7 +69,8 @@ export default class StorageSandbox extends SandboxBase {
                 }
             };
 
-            this._unloadSandbox.on(this._unloadSandbox.BEFORE_UNLOAD_EVENT, saveToNativeStorages);
+            this._unloadSandbox.on(this._unloadSandbox.UNLOAD_EVENT, saveToNativeStorages);
+
             // NOTE: In some case, a browser does not emit the onBeforeUnload event and we need manually watch navigation (GH-1999).
             // Also, on iOS devices, we realize the BEFORE_UNLOAD_EVENT through the onPageHide event that browser emits too late
             // and we do not have time to save the localStorage wrapper to the native localStorage (GH-1507).
@@ -87,7 +86,7 @@ export default class StorageSandbox extends SandboxBase {
 
     _overrideStorageEvent () {
         // @ts-ignore
-        this.window.StorageEvent = function (type, opts) {
+        this.window.StorageEvent = function (this: Window, type, opts) {
             if (arguments.length === 0)
                 throw new TypeError();
 
@@ -96,10 +95,10 @@ export default class StorageSandbox extends SandboxBase {
             if (storedArea)
                 delete opts.storageArea;
 
-            const event = new this.nativeMethods.StorageEvent(type, opts);
+            const event = new this['nativeMethods'].StorageEvent(type, opts);
 
             if (storedArea) {
-                this.nativeMethods.objectDefineProperty(event, 'storageArea', {
+                this['nativeMethods'].objectDefineProperty(event, 'storageArea', {
                     get: () => storedArea,
                     set: () => void 0
                 });
@@ -144,7 +143,7 @@ export default class StorageSandbox extends SandboxBase {
             e => this._simulateStorageEventIfNecessary(e, this.sessionStorageWrapper));
 
         this._listeners.initElementListening(window, ['storage']);
-        this._listeners.addInternalEventListener(window, ['storage'], (_e, dispatched, preventEvent) => {
+        this._listeners.addInternalEventBeforeListener(window, ['storage'], (_e, dispatched, preventEvent) => {
             if (!dispatched)
                 preventEvent();
         });

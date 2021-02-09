@@ -3,7 +3,7 @@ import * as domUtils from './dom';
 import * as urlResolver from './url-resolver';
 import settings from '../settings';
 import nativeMethods from '../sandbox/native-methods';
-import getGlobalContextInfo from './global-context-info';
+import globalContextInfo from './global-context-info';
 
 let forcedLocation = null;
 
@@ -13,14 +13,13 @@ export function getLocation (): string {
     if (forcedLocation)
         return forcedLocation;
 
-    const globalCtx    = getGlobalContextInfo().global;
-    const frameElement = domUtils.getFrameElement(globalCtx);
+    const frameElement = domUtils.getFrameElement(globalContextInfo.global);
 
     // NOTE: Fallback to the owner page's URL if we are in an iframe without src.
     if (frameElement && domUtils.isIframeWithoutSrc(frameElement))
         return settings.get().referer;
 
-    return globalCtx.location.toString();
+    return globalContextInfo.global.location.toString();
 }
 
 // NOTE: We need to be able to force the page location. During the test, Hammerhead should think that it is on the
@@ -37,21 +36,27 @@ export function sameOriginCheck (location: string, checkedUrl: string): boolean 
 }
 
 export function resolveUrl (url: string, doc?: Document): string {
-    url = sharedUrlUtils.getURLString(url);
+    let preProcessedUrl = sharedUrlUtils.getURLString(url);
 
-    if (url && url.indexOf('//') === 0) {
+    if (preProcessedUrl && preProcessedUrl.indexOf('//') === 0) {
         // eslint-disable-next-line no-restricted-properties
         const pageProtocol = getParsed().protocol;
 
-        url = pageProtocol + sharedUrlUtils.correctMultipleSlashes(url, pageProtocol);
+        preProcessedUrl = pageProtocol + sharedUrlUtils.correctMultipleSlashes(preProcessedUrl, pageProtocol);
     }
     else
-        url = sharedUrlUtils.correctMultipleSlashes(url);
+        preProcessedUrl = sharedUrlUtils.correctMultipleSlashes(preProcessedUrl);
 
-    return typeof document !== 'undefined'
-    // @ts-ignore
-        ? urlResolver.resolve(url, doc || document)
-        : new nativeMethods.URL(url, get()).href; // eslint-disable-line no-restricted-properties
+    if (globalContextInfo.isInWorker) {
+        if (self.location.protocol !== 'blob:') // eslint-disable-line no-restricted-properties
+            return new nativeMethods.URL(preProcessedUrl, get()).href; // eslint-disable-line no-restricted-properties
+        else
+            return url;
+    }
+    else {
+        // @ts-ignore
+        return urlResolver.resolve(preProcessedUrl, doc || document);
+    }
 }
 
 export function get (): string {
@@ -120,12 +125,9 @@ function parseLocationThroughURL (url: string) {
 export function getParsed () {
     const dest = get();
 
-    return typeof document !== 'undefined' ? parseLocationThroughAnchor(dest) : parseLocationThroughURL(dest);
+    return globalContextInfo.isInWorker ? parseLocationThroughURL(dest) : parseLocationThroughAnchor(dest);
 }
 
 export function getOriginHeader (): string {
-    const parsedDest = getParsed();
-
-    // eslint-disable-next-line no-restricted-properties
-    return parsedDest.protocol === 'file:' ? get() : sharedUrlUtils.getDomain(parsedDest);
+    return sharedUrlUtils.getDomain(getParsed());
 }

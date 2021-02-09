@@ -1,25 +1,30 @@
-const babel          = require('@babel/core');
-const gulpBabel      = require('gulp-babel');
-const gulpTypeScript = require('gulp-typescript');
-const del            = require('del');
-const eslint         = require('gulp-eslint');
-const fs             = require('fs');
-const gulp           = require('gulp');
-const gulpStep       = require('gulp-step');
-const qunitHarness   = require('gulp-qunit-harness');
-const mocha          = require('gulp-mocha-simple');
-const mustache       = require('gulp-mustache');
-const rename         = require('gulp-rename');
-const webmake        = require('@belym.a.2105/gulp-webmake');
-const uglify         = require('gulp-uglify');
-const util           = require('gulp-util');
-const ll             = require('gulp-ll-next');
-const gulpRunCommand = require('gulp-run-command').default;
-const clone          = require('gulp-clone');
-const mergeStreams   = require('merge-stream');
-const path           = require('path');
+const babel                 = require('@babel/core');
+const gulpBabel             = require('gulp-babel');
+const gulpTypeScript        = require('gulp-typescript');
+const del                   = require('del');
+const eslint                = require('gulp-eslint');
+const fs                    = require('fs');
+const gulp                  = require('gulp');
+const gulpStep              = require('gulp-step');
+const qunitHarness          = require('gulp-qunit-harness');
+const mocha                 = require('gulp-mocha-simple');
+const mustache              = require('gulp-mustache');
+const rename                = require('gulp-rename');
+const webmake               = require('@belym.a.2105/gulp-webmake');
+const uglify                = require('gulp-uglify');
+const util                  = require('gulp-util');
+const ll                    = require('gulp-ll-next');
+const gulpRunCommand        = require('gulp-run-command').default;
+const clone                 = require('gulp-clone');
+const mergeStreams          = require('merge-stream');
+const path                  = require('path');
+const getClientTestSettings = require('./gulp/utils/get-client-test-settings');
+const SAUCELABS_SETTINGS    = require('./gulp/saucelabs-settings');
+const runPlayground         = require('./gulp/utils/run-playground');
 
 gulpStep.install();
+
+const needBeautifyScripts = process.argv.includes('--beautify');
 
 ll
     .install()
@@ -29,87 +34,7 @@ ll
         'client-scripts-bundle'
     ]);
 
-const getClientTestSettings = () => {
-    return {
-        basePath:        './test/client/fixtures',
-        port:            2000,
-        crossDomainPort: 2001,
-        scripts:         [
-            { src: '/hammerhead.js', path: util.env.dev ? './lib/client/hammerhead.js' : './lib/client/hammerhead.min.js' },
-            { src: '/before-test.js', path: './test/client/before-test.js' }
-        ],
-
-        configApp: require('./test/client/config-qunit-server-app')
-    };
-};
-
 const USE_STRICT_RE = /^(['"])use strict\1;?/;
-
-const CLIENT_TESTS_BROWSERS = [
-    {
-        platform:    'Windows 10',
-        browserName: 'MicrosoftEdge'
-    },
-    {
-        platform:    'Windows 10',
-        browserName: 'chrome'
-    },
-    {
-        platform:    'Windows 10',
-        browserName: 'firefox'
-    },
-    {
-        platform:    'Windows 10',
-        browserName: 'internet explorer',
-        version:     '11.0'
-    },
-    {
-        browserName: 'safari',
-        platform:    'macOS 10.14',
-        version:     '12.0'
-    },
-    {
-        browserName: 'safari',
-        platform:    'macOS 10.15',
-        version:     'latest'
-    },
-    {
-        browserName:     'Safari',
-        deviceName:      'iPhone 7 Plus Simulator',
-        platformVersion: '11.3',
-        platformName:    'iOS'
-    },
-    {
-        deviceName:      'Android GoogleAPI Emulator',
-        browserName:     'Chrome',
-        platformVersion: '7.1',
-        platformName:    'Android'
-    },
-    {
-        browserName: 'chrome',
-        platform:    'OS X 10.11'
-    },
-    {
-        browserName: 'firefox',
-        platform:    'OS X 10.11'
-    }
-];
-
-const SAUCELABS_SETTINGS = {
-    username:  process.env.SAUCE_USERNAME,
-    accessKey: process.env.SAUCE_ACCESS_KEY,
-    build:     process.env.TRAVIS_JOB_ID || '',
-    tags:      [process.env.TRAVIS_BRANCH || 'master'],
-    browsers:  CLIENT_TESTS_BROWSERS,
-    name:      'testcafe-hammerhead client tests',
-    timeout:   360
-};
-
-function hang () {
-    return new Promise(() => {
-        // NOTE: Hang forever.
-    });
-}
 
 // Build
 gulp.task('clean-lib', () => {
@@ -217,9 +142,11 @@ gulp.step('templates', () => {
 gulp.step('lint-js', () => {
     return gulp
         .src([
-            './test/server/*.js',
+            './test/server/**/*.js',
             './test/client/fixtures/**/*.js',
-            'Gulpfile.js'
+            './gulp/**/*.js',
+            'Gulpfile.js',
+            '!./test/server/data/**/*.js'
         ])
         .pipe(eslint())
         .pipe(eslint.format())
@@ -250,7 +177,7 @@ gulp.task('build',
 
 // Test
 gulp.step('mocha', () => {
-    return gulp.src('./test/server/*-test.js', { read: false })
+    return gulp.src('./test/server/**/*-test.js', { read: false })
         .pipe(mocha({
             // NOTE: Disable timeouts in debug mode.
             timeout:   typeof v8debug !== 'undefined' || !!process.debugPort ? Infinity : 2000,
@@ -286,9 +213,7 @@ gulp.step('travis-saucelabs-qunit', () => {
 gulp.task('test-client-travis', gulp.series('build', 'travis-saucelabs-qunit'));
 
 gulp.step('http-playground-server', () => {
-    require('./test/playground/server.js').start();
-
-    return hang();
+    return runPlayground({ needBeautifyScripts });
 });
 
 gulp.step('set-multi-browser-mode', done => {
@@ -304,15 +229,22 @@ gulp.task('http-playground', gulp.series('build', 'http-playground-server'));
 gulp.step('https-playground-server', () => {
     const selfSignedCertificate = require('openssl-self-signed-certificate');
 
-    require('./test/playground/server.js').start({
-        key:  selfSignedCertificate.key,
-        cert: selfSignedCertificate.cert
+    return runPlayground({
+        ssl: {
+            key:  selfSignedCertificate.key,
+            cert: selfSignedCertificate.cert,
+            needBeautifyScripts
+        }
     });
-
-    return hang();
 });
 
 gulp.task('https-playground', gulp.series('build', 'https-playground-server'));
+
+gulp.step('cached-http-playground-server', () => {
+    return runPlayground({ cache: true, needBeautifyScripts });
+});
+
+gulp.task('cached-http-playground', gulp.series('build', 'cached-http-playground-server'));
 
 gulp.task('test-functional-testcafe-travis',
     gulp.series('build',

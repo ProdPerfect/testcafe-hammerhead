@@ -4,17 +4,19 @@ import * as destLocation from './destination-location';
 import * as urlResolver from './url-resolver';
 import settings from '../settings';
 import { ResourceType } from '../../typings/url';
-import getGlobalContextInfo from './global-context-info';
+import globalContextInfo from './global-context-info';
+import { getLocation, sameOriginCheck } from './destination-location';
+import { Credentials } from '../../utils/url';
 
 const HASH_RE                          = /#[\S\s]*$/;
 const SUPPORTED_WEB_SOCKET_PROTOCOL_RE = /^wss?:/i;
+const SCOPE_RE                         = /\/[^/]*$/;
 
 // NOTE: The window.location equals 'about:blank' in iframes without src
 // therefore we need to find a window with src to get the proxy settings
-const DEFAULT_PROXY_SETTINGS = (function () {
+export const DEFAULT_PROXY_SETTINGS = (function () {
     /*eslint-disable no-restricted-properties*/
-    const globalCtx    = getGlobalContextInfo();
-    let locationWindow = globalCtx.isInWorker ? { location: parseUrl(self.location.origin), parent: null } : window;
+    let locationWindow = globalContextInfo.isInWorker ? { location: parseUrl(self.location.origin), parent: null } : window;
     let proxyLocation  = locationWindow.location;
 
     while (!proxyLocation.hostname) {
@@ -57,10 +59,11 @@ export function getProxyUrl (url: string, opts?): string {
         ? proxyServerProtocol.replace('http', 'ws')
         : proxyServerProtocol;
 
-    const sessionId = opts && opts.sessionId || settings.get().sessionId;
-    const windowId  = opts && opts.windowId || settings.get().windowId;
-    let charset     = opts && opts.charset;
-    let reqOrigin   = opts && opts.reqOrigin;
+    const sessionId   = opts && opts.sessionId || settings.get().sessionId;
+    const windowId    = opts && opts.windowId || settings.get().windowId;
+    const credentials = opts && opts.credentials;
+    let charset       = opts && opts.charset;
+    let reqOrigin     = opts && opts.reqOrigin;
 
     const crossDomainPort = getCrossDomainProxyPort(proxyPort);
 
@@ -88,13 +91,18 @@ export function getProxyUrl (url: string, opts?): string {
             sessionId,
             resourceType,
             charset,
-            reqOrigin
+            reqOrigin,
+            credentials
         });
     }
 
     const parsedUrl = sharedUrlUtils.parseUrl(resolvedUrl);
 
-    charset = charset || parsedResourceType.isScript && document[INTERNAL_PROPS.documentCharset];
+    if (!parsedUrl.protocol) // eslint-disable-line no-restricted-properties
+        return url;
+
+    charset = charset || (parsedResourceType.isScript || parsedResourceType.isServiceWorker) &&
+        document[INTERNAL_PROPS.documentCharset];
 
     // NOTE: It seems that the relative URL had the leading slash or dots, so that the proxy info path part was
     // removed by the resolver and we have an origin URL with the incorrect host and protocol.
@@ -117,7 +125,7 @@ export function getProxyUrl (url: string, opts?): string {
         parsedUrl.protocol = parsedUrl.protocol.replace('ws', 'http');
 
         resolvedUrl = sharedUrlUtils.formatUrl(parsedUrl);
-        reqOrigin   = reqOrigin || encodeURIComponent(destLocation.getOriginHeader());
+        reqOrigin   = reqOrigin || destLocation.getOriginHeader();
     }
 
     return sharedUrlUtils.getProxyUrl(resolvedUrl, {
@@ -128,7 +136,8 @@ export function getProxyUrl (url: string, opts?): string {
         resourceType,
         charset,
         reqOrigin,
-        windowId
+        windowId,
+        credentials
     });
 }
 
@@ -205,12 +214,16 @@ export function parseProxyUrl (proxyUrl: string) {
     return sharedUrlUtils.parseProxyUrl(proxyUrl);
 }
 
-export function parseUrl (url: string) {
+export function parseUrl (url: string | URL) {
     return sharedUrlUtils.parseUrl(url);
 }
 
-export function convertToProxyUrl (url: string, resourceType, charset) {
-    return getProxyUrl(url, { resourceType, charset });
+export function convertToProxyUrl (url: string, resourceType, charset, isCrossDomain = false) {
+    return getProxyUrl(url, {
+        resourceType, charset,
+        // eslint-disable-next-line no-restricted-properties
+        proxyPort: isCrossDomain ? settings.get().crossDomainProxyPort : DEFAULT_PROXY_SETTINGS.port
+    });
 }
 
 export function changeDestUrlPart (proxyUrl: string, nativePropSetter, value, resourceType) {
@@ -272,4 +285,28 @@ export function getDestinationUrl (proxyUrl: any) {
     const parsedProxyUrl = parseProxyUrl(proxyUrl);
 
     return parsedProxyUrl ? parsedProxyUrl.destUrl : proxyUrl;
+}
+
+export function getScope (url: string): string | null {
+    if (!isSupportedProtocol(url))
+        return null;
+
+    const parsedUrl = parseUrl(resolveUrlAsDest(url));
+
+    if (!parsedUrl)
+        return null;
+
+    return parsedUrl.partAfterHost.replace(SCOPE_RE, '/') || '/';
+}
+
+export function getAjaxProxyUrl (url: string, credentials: Credentials) {
+    const isCrossDomain = !sameOriginCheck(getLocation(), url);
+    const opts          = { resourceType: stringifyResourceType({ isAjax: true }), credentials } as any;
+
+    if (isCrossDomain) {
+        opts.proxyPort = settings.get().crossDomainProxyPort;
+        opts.reqOrigin = destLocation.getOriginHeader();
+    }
+
+    return getProxyUrl(url, opts);
 }

@@ -333,6 +333,10 @@ export function isCrossDomainWindows (window1: Window, window2: Window): boolean
     }
 }
 
+export function isIframeWindow (wnd: Window): boolean {
+    return wnd !== wnd.top;
+}
+
 export function isDomElement (el): boolean {
     if (el instanceof nativeMethods.elementClass)
         return true;
@@ -345,10 +349,37 @@ export function getTagName (el): string {
     return el && typeof el.tagName === 'string' ? el.tagName.toLowerCase() : '';
 }
 
-export function isElementInDocument (el: Element, currentDocument?: Document): boolean {
+export const SHADOW_ROOT_PARENT_ELEMENT = 'hammerhead|element|shadow-root-parent';
+
+export function getNodeShadowRootParent (el: Node): Element | null {
+    let parent = nativeMethods.nodeParentNodeGetter.call(el);
+
+    while (parent && parent.nodeType !== Node.DOCUMENT_FRAGMENT_NODE)
+        parent = nativeMethods.nodeParentNodeGetter.call(parent);
+
+    return parent && parent[SHADOW_ROOT_PARENT_ELEMENT];
+}
+
+export function getParentExceptShadowRoot (el: Node) {
+    const parent = nativeMethods.nodeParentNodeGetter.call(el);
+
+    return parent && parent.nodeType === Node.DOCUMENT_FRAGMENT_NODE && parent[SHADOW_ROOT_PARENT_ELEMENT]
+           ? parent[SHADOW_ROOT_PARENT_ELEMENT]
+           : parent;
+}
+
+export function isElementInDocument (el: Node, currentDocument?: Document): boolean {
     const doc = currentDocument || document;
 
-    return doc.documentElement ? doc.documentElement.contains(el) : false;
+    if (!doc.documentElement)
+        return false;
+
+    if (doc.documentElement.contains(el))
+        return true;
+
+    const shadowRootParent = getNodeShadowRootParent(el);
+
+    return shadowRootParent ? isElementInDocument(shadowRootParent) : false;
 }
 
 export function isElementInIframe (el: HTMLElement, currentDocument?: Document): boolean {
@@ -364,6 +395,10 @@ export function isHammerheadAttr (attr): boolean {
 
 export function isIframeElement (el: any): el is HTMLIFrameElement {
     return instanceToString(el) === '[object HTMLIFrameElement]';
+}
+
+export function isFrameElement (el: any): el is HTMLFrameElement {
+    return instanceToString(el) === '[object HTMLFrameElement]';
 }
 
 export function isIframeWithoutSrc (iframe: HTMLIFrameElement | HTMLFrameElement): boolean {
@@ -395,6 +430,10 @@ export function isIframeWithoutSrc (iframe: HTMLIFrameElement | HTMLFrameElement
         return false;
 
     return !iframeDocumentLocationHaveSupportedProtocol;
+}
+
+export function isIframeWithSrcdoc (iframe: HTMLIFrameElement | HTMLFrameElement) {
+    return nativeMethods.iframeSrcdocGetter && nativeMethods.hasAttribute.call(iframe, 'srcdoc');
 }
 
 export function isImgElement (el: any): el is HTMLImageElement {
@@ -490,7 +529,7 @@ export function isFormElement (el: any): el is HTMLFormElement {
     return instanceToString(el) === '[object HTMLFormElement]';
 }
 
-export function isFileInput (el: HTMLElement): boolean {
+export function isFileInput (el: Node): el is HTMLInputElement {
     return isInputElement(el) && el.type.toLowerCase() === 'file';
 }
 
@@ -498,7 +537,7 @@ export function isInputWithNativeDialog (el: HTMLInputElement): boolean {
     return isInputElement(el) && INPUT_WITH_NATIVE_DIALOG.test(el.type.toLowerCase());
 }
 
-export function isBodyElementWithChildren (el: HTMLElement): boolean {
+export function isBodyElementWithChildren (el: Node): boolean {
     return isBodyElement(el) && nativeMethods.htmlCollectionLengthGetter.call(el.children);
 }
 

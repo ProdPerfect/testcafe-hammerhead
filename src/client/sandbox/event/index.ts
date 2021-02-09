@@ -15,9 +15,10 @@ import UnloadSandbox from './unload';
 import MessageSandbox from './message';
 import ShadowUI from '../shadow-ui';
 import TimersSandbox from '../timers';
+import { overrideFunction, overrideStringRepresentation } from '../../utils/overriding';
 
 export default class EventSandbox extends SandboxBase {
-    EVENT_PREVENTED_EVENT: string = 'hammerhead|event|event-prevented';
+    EVENT_PREVENTED_EVENT = 'hammerhead|event|event-prevented';
 
     listeners: Listeners;
     elementEditingWatcher: ElementEditingWatcher;
@@ -162,7 +163,7 @@ export default class EventSandbox extends SandboxBase {
         // 'Click' is a complex emulated action that uses 'dispatchEvent' method internally.
         // Another browsers open the native browser dialog in this case.
         // This is why, we are forced to prevent the browser's open file dialog.
-        this.listeners.addInternalEventListener(window, ['click'], (e: Event, dispatched: boolean) => {
+        this.listeners.addInternalEventBeforeListener(window, ['click'], (e: Event, dispatched: boolean) => {
             if (dispatched && domUtils.isInputWithNativeDialog(e.target as HTMLInputElement))
                 preventDefault(e, true);
         });
@@ -171,38 +172,48 @@ export default class EventSandbox extends SandboxBase {
     attach (window: Window & typeof globalThis): void {
         super.attach(window);
 
-        window.HTMLInputElement.prototype.setSelectionRange    = this._overriddenMethods.setSelectionRange;
-        window.HTMLTextAreaElement.prototype.setSelectionRange = this._overriddenMethods.setSelectionRange;
+        overrideFunction(window.HTMLInputElement.prototype, 'setSelectionRange', this._overriddenMethods.setSelectionRange);
+        overrideFunction(window.HTMLTextAreaElement.prototype, 'setSelectionRange', this._overriddenMethods.setSelectionRange);
 
         if (isIE11) {
-            window.Window.prototype.dispatchEvent      = this._overriddenMethods.dispatchEvent;
-            window.Document.prototype.dispatchEvent    = this._overriddenMethods.dispatchEvent;
-            window.HTMLElement.prototype.dispatchEvent = this._overriddenMethods.dispatchEvent;
-            window.SVGElement.prototype.dispatchEvent  = this._overriddenMethods.dispatchEvent;
+            overrideFunction(window.Window.prototype, 'dispatchEvent', this._overriddenMethods.dispatchEvent);
+            overrideFunction(window.Document.prototype, 'dispatchEvent', this._overriddenMethods.dispatchEvent);
+            overrideFunction(window.HTMLElement.prototype, 'dispatchEvent', this._overriddenMethods.dispatchEvent);
+            overrideFunction(window.SVGElement.prototype, 'dispatchEvent', this._overriddenMethods.dispatchEvent);
         }
-        else
-            window.EventTarget.prototype.dispatchEvent = this._overriddenMethods.dispatchEvent;
+        else {
+            overrideFunction(window.EventTarget.prototype, 'dispatchEvent', this._overriddenMethods.dispatchEvent);
+        }
 
-        window.HTMLElement.prototype.focus    = this._overriddenMethods.focus;
-        window.HTMLElement.prototype.blur     = this._overriddenMethods.blur;
-        window.HTMLElement.prototype.click    = this._overriddenMethods.click;
-        window.Event.prototype.preventDefault = this._overriddenMethods.preventDefault;
+        overrideFunction(window.HTMLElement.prototype, 'focus', this._overriddenMethods.focus);
+        overrideFunction(window.HTMLElement.prototype, 'blur', this._overriddenMethods.blur);
+        overrideFunction(window.HTMLElement.prototype, 'click', this._overriddenMethods.click);
+
+        overrideFunction(window.Event.prototype, 'preventDefault', this._overriddenMethods.preventDefault);
 
         // @ts-ignore Window constructor has no the focus method
         window.Window.focus = this._overriddenMethods.focus;
+
+        // NOTE: we cannot use 'overrideFunction' here since the focus method may not exist
+        // @ts-ignore Window constructor has no the focus method
+        overrideStringRepresentation(window.Window.focus, nativeMethods.focus);
+
         // @ts-ignore Window constructor has no the blur method
         window.Window.blur  = this._overriddenMethods.blur;
 
+        // NOTE: we cannot use 'overrideFunction' here since the blur method may not exist
+        // @ts-ignore Window constructor has no the blur method
+        overrideStringRepresentation(window.Window.blur, nativeMethods.blur);
+
         // @ts-ignore TextRange exists only in IE
-        if (window.TextRange && window.TextRange.prototype.select) {
+        if (window.TextRange && window.TextRange.prototype.select)
             // @ts-ignore TextRange exists only in IE
-            window.TextRange.prototype.select = this._overriddenMethods.select;
-        }
+            overrideFunction(window.TextRange.prototype, 'select', this._overriddenMethods.select);
 
         this.listeners.initElementListening(document, DOM_EVENTS);
         this.listeners.initElementListening(window, DOM_EVENTS.concat(['load', 'beforeunload', 'pagehide', 'unload', 'message']));
-        this.listeners.addInternalEventListener(window, ['focus'], this._onFocus);
-        this.listeners.addInternalEventListener(window, ['focus', 'blur', 'change', 'focusin', 'focusout'], this._cancelInternalEvents);
+        this.listeners.addInternalEventBeforeListener(window, ['focus'], this._onFocus);
+        this.listeners.addInternalEventBeforeListener(window, ['focus', 'blur', 'change', 'focusin', 'focusout'], this._cancelInternalEvents);
 
         this._preventInputNativeDialogs(window);
 

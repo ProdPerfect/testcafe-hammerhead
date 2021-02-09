@@ -3,20 +3,20 @@ const express      = require('express');
 const ntlm         = require('express-ntlm');
 const auth         = require('basic-auth');
 const request      = require('request-promise-native');
-const Proxy        = require('../../lib/proxy');
-const Session      = require('../../lib/session');
+const headersUtils = require('../../lib/utils/headers');
 
-describe('Authentication', () => {
+const {
+    createProxy,
+    createSession
+} = require('./common/utils');
+
+describe('Authentication', () => { // eslint-disable-line
     let proxy   = null;
     let session = null;
 
     beforeEach(() => {
-        session = new Session();
-
-        session.getAuthCredentials = () => null;
-        session.handleFileDownload = () => void 0;
-
-        proxy = new Proxy('127.0.0.1', 1836, 1837);
+        session = createSession();
+        proxy   = createProxy();
     });
 
     afterEach(() => {
@@ -98,7 +98,8 @@ describe('Authentication', () => {
             };
 
             const options = {
-                url:                     proxy.openSession('http://127.0.0.1:1507/', session),
+                url: proxy.openSession('http://127.0.0.1:1507/', session),
+
                 resolveWithFullResponse: true
             };
 
@@ -118,7 +119,8 @@ describe('Authentication', () => {
             };
 
             const options = {
-                url:                     proxy.openSession('http://127.0.0.1:1507/', session),
+                url: proxy.openSession('http://127.0.0.1:1507/', session),
+
                 resolveWithFullResponse: true
             };
 
@@ -130,7 +132,7 @@ describe('Authentication', () => {
                     expect(err.statusCode).equal(401);
                     expect(err.error).equal('Access denied');
                     // NOTE: prevent showing the native credentials window.
-                    expect(err.response.headers['www-authenticate']).to.be.undefined;
+                    expect(err.response.headers['www-authenticate']).eql(headersUtils.addAuthenticatePrefix('Basic realm="example"'));
                 });
         });
 

@@ -1,6 +1,7 @@
-var urlUtils     = hammerhead.get('./utils/url');
-var destLocation = hammerhead.get('./utils/destination-location');
+var urlUtils     = hammerhead.utils.url;
+var destLocation = hammerhead.utils.destLocation;
 var INSTRUCTION  = hammerhead.get('../processing/script/instruction');
+var XhrSandbox   = hammerhead.get('./sandbox/xhr');
 
 var windowSandox  = hammerhead.sandbox.node.win;
 var nativeMethods = hammerhead.nativeMethods;
@@ -25,6 +26,139 @@ test('window.onerror setter/getter', function () {
     strictEqual(window.onerror, handler);
 
     window.onerror = storedOnErrorHandler;
+});
+
+test('wrappers of native functions should return the correct string representations', function () {
+    window.checkStringRepresentation(window.CanvasRenderingContext2D.prototype.drawImage,
+        nativeMethods.canvasContextDrawImage,
+        'CanvasRenderingContext2D.prototype.drawImage');
+
+    if (window.Object.assign)
+        window.checkStringRepresentation(window.Object.assign, nativeMethods.objectAssign, 'Object.assign');
+
+    window.checkStringRepresentation(window.open, nativeMethods.windowOpen, 'open');
+
+    if (window.FontFace)
+        window.checkStringRepresentation(window.FontFace, nativeMethods.FontFace, 'FontFace');
+
+    if (window.Worker) {
+        window.checkStringRepresentation(window.Worker, nativeMethods.Worker, 'Worker');
+        window.checkStringRepresentation(window.Worker.prototype.constructor, nativeMethods.Worker,
+            'Worker.prototype.constructor');
+    }
+
+    if (window.Blob)
+        window.checkStringRepresentation(window.Blob, nativeMethods.Blob, 'Blob');
+
+    // NOTE: File in IE11 is not constructable.
+    if (window.File && typeof window.File === 'function')
+        window.checkStringRepresentation(window.File, nativeMethods.File, 'File');
+
+    if (window.EventSource)
+        window.checkStringRepresentation(window.EventSource, nativeMethods.EventSource, 'EventSource');
+
+    if (window.MutationObserver)
+        window.checkStringRepresentation(window.MutationObserver, nativeMethods.MutationObserver, 'MutationObserver');
+
+    if (window.WebKitMutationObserver) {
+        window.checkStringRepresentation(window.WebKitMutationObserver, nativeMethods.MutationObserver,
+            'WebKitMutationObserver');
+    }
+
+    if (window.Proxy)
+        window.checkStringRepresentation(window.Proxy, nativeMethods.Proxy, 'Proxy');
+
+    if (window.registerServiceWorker) {
+        window.checkStringRepresentation(window.registerServiceWorker, nativeMethods.registerServiceWorker,
+            'registerServiceWorker');
+    }
+
+    if (window.getRegistrationServiceWorker) {
+        window.checkStringRepresentation(window.getRegistrationServiceWorker,
+            nativeMethods.getRegistrationServiceWorker,
+            'getRegistrationServiceWorker');
+    }
+
+    if (window.Range.prototype.createContextualFragment) {
+        window.checkStringRepresentation(window.Range.prototype.createContextualFragment,
+            nativeMethods.createContextualFragment,
+            'Range.prototype.createContextualFragment');
+    }
+
+    if (window.EventTarget) {
+        window.checkStringRepresentation(window.EventTarget.prototype.addEventListener,
+            nativeMethods.addEventListener,
+            'EventTarget.prototype.addEventListener');
+        window.checkStringRepresentation(window.EventTarget.prototype.removeEventListener,
+            nativeMethods.removeEventListener,
+            'EventTarget.prototype.removeEventListener');
+    }
+    else {
+        window.checkStringRepresentation(window.addEventListener, nativeMethods.windowAddEventListener,
+            'addEventListener');
+        window.checkStringRepresentation(window.removeEventListener, nativeMethods.windowRemoveEventListener,
+            'removeEventListener');
+    }
+
+    if (window.Image)
+        window.checkStringRepresentation(window.Image, nativeMethods.Image, 'Image');
+
+    window.checkStringRepresentation(window.Function, nativeMethods.Function, 'Function');
+    window.checkStringRepresentation(window.Function.prototype.constructor, nativeMethods.Function,
+        'Function.prototype.constructor');
+
+    if (typeof window.history.pushState === 'function' && typeof window.history.replaceState === 'function') {
+        window.checkStringRepresentation(window.history.pushState, nativeMethods.historyPushState,
+            'history.pushState');
+        window.checkStringRepresentation(window.history.replaceState, nativeMethods.historyReplaceState,
+            'history.replaceState');
+    }
+
+    if (window.navigator.sendBeacon)
+        window.checkStringRepresentation(window.navigator.sendBeacon, nativeMethods.sendBeacon);
+
+    if (window.navigator.registerProtocolHandler) {
+        window.checkStringRepresentation(window.navigator.registerProtocolHandler,
+            nativeMethods.registerProtocolHandler,
+            'navigator.registerProtocolHandler');
+    }
+
+    if (window.FormData) {
+        window.checkStringRepresentation(window.FormData.prototype.append, nativeMethods.formDataAppend,
+            'FormData.prototype.append');
+    }
+
+    if (window.WebSocket)
+        window.checkStringRepresentation(window.WebSocket, nativeMethods.WebSocket, 'WebSocket');
+
+    if (window.DOMParser) {
+        window.checkStringRepresentation(window.DOMParser.prototype.parseFromString,
+            nativeMethods.DOMParserParseFromString,
+            'DOMParser.prototype.parseFromString');
+    }
+
+    if (window.DOMTokenList) {
+        window.checkStringRepresentation(window.DOMTokenList.prototype.add, nativeMethods.tokenListAdd,
+            'DOMTokenList.prototype.add');
+        window.checkStringRepresentation(window.DOMTokenList.prototype.remove, nativeMethods.tokenListRemove,
+            'DOMTokenList.prototype.remove');
+        window.checkStringRepresentation(window.DOMTokenList.prototype.toggle, nativeMethods.tokenListToggle,
+            'DOMTokenList.prototype.toggle');
+
+        if (window.DOMTokenList.prototype.replace) {
+            window.checkStringRepresentation(window.DOMTokenList.prototype.replace, nativeMethods.tokenListReplace,
+                'DOMTokenList.prototype.replace');
+        }
+
+        if (window.DOMTokenList.prototype.supports) {
+            window.checkStringRepresentation(window.DOMTokenList.prototype.supports, nativeMethods.tokenListSupports,
+                'DOMTokenList.prototype.supports');
+        }
+    }
+
+    window.checkStringRepresentation(window.DOMImplementation.prototype.createHTMLDocument,
+        nativeMethods.createHTMLDocument,
+        'DOMImplementation.prototype.createHTMLDocument');
 });
 
 if (nativeMethods.winOnUnhandledRejectionSetter) {
@@ -216,11 +350,9 @@ test('parameters passed to the native function in its original form', function (
     checkNativeFunctionArgs('abort', 'xhrAbort', xhr);
 
     nativeMethods.xhrOpen.call(xhr, 'GET', '/path', true);
-    checkNativeFunctionArgs('send', 'xhrSend', xhr);
+    XhrSandbox.REQUESTS_OPTIONS.set(xhr, { withCredentials: false });
 
-    // registerServiceWorker
-    if (nativeMethods.registerServiceWorker)
-        checkNativeFunctionArgs('register', 'registerServiceWorker', window.navigator.serviceWorker);
+    checkNativeFunctionArgs('send', 'xhrSend', xhr);
 
     // Event
     checkNativeFunctionArgs('addEventListener', browserUtils.isIE11 ? 'windowAddEventListener' : 'addEventListener', window);
@@ -282,7 +414,7 @@ if (window.history.replaceState && window.history.pushState) {
                 var baseUrl             = 'http://' + location.host + '/some/path';
 
                 iframeHammerhead.get('./utils/url-resolver').updateBase(baseUrl, iframe.contentDocument);
-                iframeHammerhead.get('./utils/destination-location')
+                iframeHammerhead.utils.destLocation
                     .forceLocation('http://' + iframeLocation.host + '/sessionId/' + baseUrl);
 
                 var testUrl = function (url, fn, nativeFn) {
@@ -452,10 +584,10 @@ if (nativeMethods.windowOriginGetter) {
         var storedWindowOriginGetter = nativeMethods.windowOriginGetter;
 
         nativeMethods.windowOriginGetter = function () {
-            return null;
+            return 'null';
         };
 
-        strictEqual(window.origin, null);
+        strictEqual(window.origin, 'null');
 
         nativeMethods.windowOriginGetter = storedWindowOriginGetter;
 
@@ -465,7 +597,7 @@ if (nativeMethods.windowOriginGetter) {
 
         destLocation.forceLocation(urlUtils.getProxyUrl('file:///home/testcafe/site'));
 
-        strictEqual(window.origin, null);
+        strictEqual(window.origin, 'null');
 
         destLocation.forceLocation(storedForcedLocation);
     });
@@ -477,6 +609,16 @@ if (nativeMethods.windowOriginGetter) {
 
         window.origin = 2;
         strictEqual(window.origin, 2);
+    });
+
+    test('should be null in iframe with the sandbox attribute that doesn`t contain `allow-same-origin`', function () {
+        return createTestIframe({
+            src:     getSameDomainPageUrl('../../../data/iframe/simple-iframe.html'),
+            sandbox: 'allow-scripts'
+        })
+            .then(function (iframe) {
+                strictEqual(iframe.contentWindow.origin, 'null');
+            });
     });
 }
 

@@ -2,11 +2,11 @@ var INSTRUCTION             = hammerhead.get('../processing/script/instruction')
 var CodeInstrumentation     = hammerhead.get('./sandbox/code-instrumentation');
 var LocationInstrumentation = hammerhead.get('./sandbox/code-instrumentation/location');
 var LocationWrapper         = hammerhead.get('./sandbox/code-instrumentation/location/wrapper');
-var urlUtils                = hammerhead.get('./utils/url');
-var sharedUrlUtils          = hammerhead.get('../utils/url');
-var destLocation            = hammerhead.get('./utils/destination-location');
+var urlUtils                = hammerhead.utils.url;
+var sharedUrlUtils          = hammerhead.sharedUtils.url;
+var destLocation            = hammerhead.utils.destLocation;
 var urlResolver             = hammerhead.get('./utils/url-resolver');
-var extend                  = hammerhead.get('./utils/extend');
+var extend                  = hammerhead.utils.extend;
 
 var Promise       = hammerhead.Promise;
 var nativeMethods = hammerhead.nativeMethods;
@@ -90,6 +90,17 @@ var ENSURE_URL_TRAILING_SLASH_TEST_CASES = [
     }
 ];
 
+test('location native behavior', function () {
+    var locationWrapper = getLocation(location);
+
+    strictEqual(locationWrapper.constructor.name, Location.name);
+    strictEqual(locationWrapper.constructor.toString(), location.constructor.toString());
+    strictEqual(locationWrapper instanceof Location, true);
+
+    if (typeof Location === 'function')
+        strictEqual(Function.prototype.toString.apply(locationWrapper.constructor), Function.prototype.toString.apply(Location));
+});
+
 test('"isLocation" (GH-1863)', function () {
     var locationCopy = extend({}, window.location);
 
@@ -123,6 +134,71 @@ test('iframe with empty src', function () {
 
         strictEqual(anchor.href, 'https://example.com/test');
         strictEqual(eval(processScript('iframe.contentDocument.location.href')), 'about:blank');
+    }
+
+    return createTestIframe()
+        .then(assert)
+        .then(function () {
+            return createTestIframe({ src: '' });
+        })
+        .then(assert)
+        .then(function () {
+            return createTestIframe({ src: 'about:blank' });
+        })
+        .then(assert);
+});
+
+test('location object of iframe with empty src should have properties with correct values', function () {
+    function assert (iframe) {
+        const iframeSrcAttribute = iframe.getAttribute('src');
+
+        const nativeIframe = nativeMethods.createElement.call(iframe.contentDocument, 'iframe');
+
+        if (iframeSrcAttribute)
+            nativeMethods.setAttribute.call(nativeIframe, 'src', iframeSrcAttribute);
+
+        nativeMethods.appendChild.call(iframe.contentDocument.body, nativeIframe);
+
+        return window.QUnitGlobals.waitForIframe(nativeIframe)
+            .then(function () {
+                iframe.contentWindow['%hammerhead%'].utils.destLocation.forceLocation(null);
+
+                strictEqual(
+                    eval(processScript('iframe.contentDocument.location.protocol')),
+                    nativeIframe.contentDocument.location.protocol,
+                    'protocol property in iframe with "' + iframeSrcAttribute + '" src attribute'
+                );
+                strictEqual(
+                    eval(processScript('iframe.contentDocument.location.port')),
+                    nativeIframe.contentDocument.location.port,
+                    'port property in iframe with "' + iframeSrcAttribute + '" src attribute'
+                );
+                strictEqual(
+                    eval(processScript('iframe.contentDocument.location.host')),
+                    nativeIframe.contentDocument.location.host,
+                    'host property in iframe with "' + iframeSrcAttribute + '" src attribute'
+                );
+                strictEqual(
+                    eval(processScript('iframe.contentDocument.location.hostname')),
+                    nativeIframe.contentDocument.location.hostname,
+                    'hostname property in iframe with "' + iframeSrcAttribute + '" src attribute'
+                );
+                strictEqual(
+                    eval(processScript('iframe.contentDocument.location.pathname')),
+                    nativeIframe.contentDocument.location.pathname,
+                    'pathname property in iframe with "' + iframeSrcAttribute + '" src attribute'
+                );
+                strictEqual(
+                    eval(processScript('iframe.contentDocument.location.hash')),
+                    nativeIframe.contentDocument.location.hash,
+                    'hash property in iframe with "' + iframeSrcAttribute + '" src attribute'
+                );
+                strictEqual(
+                    eval(processScript('iframe.contentDocument.location.search')),
+                    nativeIframe.contentDocument.location.search,
+                    'search property in iframe with "' + iframeSrcAttribute + '" src attribute'
+                );
+            });
     }
 
     return createTestIframe()

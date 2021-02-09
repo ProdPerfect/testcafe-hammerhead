@@ -1,7 +1,8 @@
 import SandboxBase from './base';
-import { isCrossDomainWindows } from '../utils/dom';
+import { isCrossDomainWindows, isIframeWindow } from '../utils/dom';
 import nativeMethods from '../sandbox/native-methods';
 import MessageSandbox from './event/message';
+import { overrideFunction } from '../utils/overriding';
 
 export default class ConsoleSandbox extends SandboxBase {
     CONSOLE_METH_CALLED_EVENT = 'hammerhead|event|console-meth-called';
@@ -26,10 +27,10 @@ export default class ConsoleSandbox extends SandboxBase {
         }
     }
 
-    private _proxyConsoleMeth (meth: string): void {
-        this.window.console[meth] = (...args: any[]) => {
+    private _proxyConsoleMeth (meth: keyof Console): void {
+        overrideFunction(this.window.console, meth, (...args: any[]) => {
             if (!isCrossDomainWindows(window, window.top)) {
-                const sendToTopWindow = window !== window.top;
+                const sendToTopWindow = isIframeWindow(window);
                 const line            = nativeMethods.arrayMap.call(args, this._toString).join(' ');
 
                 if (sendToTopWindow) {
@@ -41,7 +42,7 @@ export default class ConsoleSandbox extends SandboxBase {
             }
 
             this.nativeMethods.consoleMeths[meth].apply(this.nativeMethods.console, args);
-        };
+        });
     }
 
     attach (window: Window & typeof globalThis) {

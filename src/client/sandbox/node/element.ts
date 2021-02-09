@@ -22,7 +22,7 @@ import ShadowUI from '../shadow-ui';
 import DOMMutationTracker from './live-node-list/dom-mutation-tracker';
 import { ATTRS_WITH_SPECIAL_PROXYING_LOGIC } from '../../../processing/dom/attributes';
 import settings from '../../settings';
-import { overrideDescriptor } from '../../utils/property-overriding';
+import { overrideDescriptor, overrideFunction } from '../../utils/overriding';
 import InsertPosition from '../../utils/insert-position';
 import { isFirefox } from '../../utils/browser';
 import UploadSandbox from '../upload';
@@ -38,8 +38,8 @@ const RESTRICTED_META_HTTP_EQUIV_VALUES = [BUILTIN_HEADERS.refresh, BUILTIN_HEAD
 export default class ElementSandbox extends SandboxBase {
     overriddenMethods: any;
 
-    BEFORE_FORM_SUBMIT_EVENT: string = 'hammerhead|event|before-form-submit';
-    SCRIPT_ELEMENT_ADDED_EVENT: string = 'hammerhead|event|script-added';
+    BEFORE_FORM_SUBMIT_EVENT = 'hammerhead|event|before-form-submit';
+    SCRIPT_ELEMENT_ADDED_EVENT = 'hammerhead|event|script-added';
 
     constructor (private readonly _nodeSandbox: NodeSandbox,
         private readonly _uploadSandbox: UploadSandbox,
@@ -113,28 +113,21 @@ export default class ElementSandbox extends SandboxBase {
             else if (el.hasAttribute(storedAttrName))
                 args[isNs ? 1 : 0] = storedAttrName;
         }
-        // NOTE: We simply remove the 'integrity' attribute because its value will not be relevant after the script
-        // content changes (http://www.w3.org/TR/SRI/). If this causes problems in the future, we will need to generate
-        // the correct SHA for the changed script. (GH-235)
-        else if (!isNs && loweredAttr === 'integrity' && DomProcessor.isTagWithIntegrityAttr(tagName)) {
-            const storedIntegrityAttr = DomProcessor.getStoredAttrName(attr);
+        else if (!isNs && (
+            // NOTE: We simply remove the 'integrity' attribute because its value will not be relevant after the script
+            // content changes (http://www.w3.org/TR/SRI/). If this causes problems in the future, we will need to generate
+            // the correct SHA for the changed script. (GH-235)
+            loweredAttr === 'integrity' && DomProcessor.isTagWithIntegrityAttr(tagName) ||
+            // NOTE: We simply remove the 'rel' attribute if rel='prefetch' and use stored 'rel' attribute, because the prefetch
+            // resource type is unknown. https://github.com/DevExpress/testcafe/issues/2528
+            loweredAttr === 'rel' && tagName === 'link' ||
+            loweredAttr === 'required' && domUtils.isFileInput(el) ||
+            loweredAttr === 'srcdoc' && tagName === 'iframe'
+        )) {
+            const storedAttr = DomProcessor.getStoredAttrName(attr);
 
-            if (nativeMethods.hasAttribute.call(el, storedIntegrityAttr))
-                args[0] = storedIntegrityAttr;
-        }
-        // NOTE: We simply remove the 'rel' attribute if rel='prefetch' and use stored 'rel' attribute, because the prefetch
-        // resource type is unknown. https://github.com/DevExpress/testcafe/issues/2528
-        else if (!isNs && loweredAttr === 'rel' && tagName === 'link') {
-            const storedRelAttr = DomProcessor.getStoredAttrName(attr);
-
-            if (nativeMethods.hasAttribute.call(el, storedRelAttr))
-                args[0] = storedRelAttr;
-        }
-        else if (!isNs && loweredAttr === 'required' && domUtils.isFileInput(el)) {
-            const storedRequiredAttr = DomProcessor.getStoredAttrName(attr);
-
-            if (nativeMethods.hasAttribute.call(el, storedRequiredAttr))
-                args[0] = storedRequiredAttr;
+            if (nativeMethods.hasAttribute.call(el, storedAttr))
+                args[0] = storedAttr;
         }
 
         return getAttrMeth.apply(el, args);
@@ -152,6 +145,7 @@ export default class ElementSandbox extends SandboxBase {
         const isEventAttr = domProcessor.EVENTS.indexOf(attr) !== -1;
 
         let needToCallTargetChanged = false;
+        let needToRecalcHref        = false;
 
         const isSpecialPage       = urlUtils.isSpecialPage(value);
         const isSupportedProtocol = urlUtils.isSupportedProtocol(value);
@@ -273,8 +267,12 @@ export default class ElementSandbox extends SandboxBase {
             return setAttrMeth.apply(el, [storedIntegrityAttr, value]);
         }
         else if (!isNs && loweredAttr === 'rel' && tagName === 'link') {
+            const currentValue  = nativeMethods.getAttribute.call(el, 'rel');
             const formatedValue = trim(value.toLowerCase());
             const storedRelAttr = DomProcessor.getStoredAttrName(attr);
+
+            needToRecalcHref = value !== currentValue && (value === domProcessor.MODULE_PRELOAD_LINK_REL ||
+                                                          currentValue === domProcessor.MODULE_PRELOAD_LINK_REL);
 
             if (formatedValue === 'prefetch') {
                 nativeMethods.removeAttribute.call(el, attr);
@@ -282,6 +280,12 @@ export default class ElementSandbox extends SandboxBase {
             }
             else
                 nativeMethods.removeAttribute.call(el, storedRelAttr);
+        }
+        else if (!isNs && loweredAttr === 'as' && tagName === 'link') {
+            const currentValue = nativeMethods.getAttribute.call(el, 'as');
+
+            needToRecalcHref = value !== currentValue && (value === domProcessor.PROCESSED_PRELOAD_LINK_CONTENT_TYPE ||
+                                                          currentValue === domProcessor.PROCESSED_PRELOAD_LINK_CONTENT_TYPE);
         }
         else if (!isNs && loweredAttr === 'required' && domUtils.isFileInput(el)) {
             const storedRequiredAttr = DomProcessor.getStoredAttrName(attr);
@@ -309,6 +313,13 @@ export default class ElementSandbox extends SandboxBase {
                 }
             }
         }
+        else if (!isNs && loweredAttr === 'srcdoc' && tagName === 'iframe') {
+            const storedAttr = DomProcessor.getStoredAttrName(attr);
+
+            setAttrMeth.apply(el, [storedAttr, value]);
+
+            args[valueIndex] = domProcessor.adapter.processSrcdocAttr(value);
+        }
 
         const result = setAttrMeth.apply(el, args);
 
@@ -317,6 +328,9 @@ export default class ElementSandbox extends SandboxBase {
 
         if (needToCallTargetChanged)
             ElementSandbox._onTargetChanged(el);
+
+        if (needToRecalcHref && nativeMethods.hasAttribute.call(el, 'href'))
+            this.setAttributeCore(el, ['href', nativeMethods.getAttribute.call(el, 'href')]);
 
         return result;
     }
@@ -410,18 +424,22 @@ export default class ElementSandbox extends SandboxBase {
         return result;
     }
 
-    private _addNodeCore ({ parentNode, args, nativeFn, checkBody }): void {
-        const newNode = args[0];
+    private _addNodeCore<K, A extends (string | Node)[]> (parentNode: Element | Node & ParentNode,
+                                                          newNodes: (string | Node)[], args: A,
+                                                          nativeFn: (...args: A) => K, checkBody = true): K {
+        this._prepareNodesForInsertion(newNodes, parentNode);
 
-        this._prepareNodeForInsertion(newNode, parentNode);
+        let result            = null;
+        const childNodesArray = [] as Node[];
 
-        let result          = null;
-        let childNodesArray = null;
+        for (const node of newNodes) {
+            if (domUtils.isDocumentFragmentNode(node)) {
+                const childNodes = nativeMethods.nodeChildNodesGetter.call(node);
 
-        if (domUtils.isDocumentFragmentNode(newNode)) {
-            const childNodes = nativeMethods.nodeChildNodesGetter.call(newNode);
-
-            childNodesArray = domUtils.nodeListToArray(childNodes);
+                childNodesArray.push.apply(childNodesArray, domUtils.nodeListToArray(childNodes));
+            }
+            else if (typeof node !== 'string')
+                childNodesArray.push(node);
         }
 
         // NOTE: Before the page's <body> is processed and added to DOM,
@@ -429,25 +447,38 @@ export default class ElementSandbox extends SandboxBase {
         // certain manipulations and then remove it.
         // Therefore, we need to check if the body element is present in DOM
         if (checkBody && domUtils.isBodyElementWithChildren(parentNode) && domUtils.isElementInDocument(parentNode))
-            result = this._shadowUI.insertBeforeRoot(newNode);
+            result = this._shadowUI.insertBeforeRoot(newNodes);
         else
             result = nativeFn.apply(parentNode, args);
 
-        if (childNodesArray) {
-            for (const child of childNodesArray)
-                this._onElementAdded(child);
-        }
-        else
-            this._onElementAdded(newNode);
+        for (const child of childNodesArray)
+            this._onElementAdded(child);
 
         return result;
     }
 
-    private _prepareNodeForInsertion (node, parentNode): void {
-        if (domUtils.isTextNode(node))
-            ElementSandbox._processTextNodeContent(node, parentNode);
+    private _removeNodeCore <K, A extends Node[]> (context: Node, args: A, removingNode: Node, nativeFn: (...args: A) => K): K {
+        this._onRemoveFileInputInfo(removingNode);
+        this._onRemoveIframe(removingNode);
 
-        this._nodeSandbox.processNodes(node);
+        const result = nativeFn.apply(context, args);
+
+        this._onElementRemoved(removingNode);
+
+        return result;
+    }
+
+    private _prepareNodesForInsertion (nodes: (string | Node)[], parentNode: Node): void {
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+
+            if (typeof node === 'string')
+                nodes[i] = ElementSandbox._processTextContent(node, parentNode);
+            else if (domUtils.isTextNode(node))
+                node.data = ElementSandbox._processTextContent(node.data, parentNode);
+            else
+                this._nodeSandbox.processNodes(node as Element | DocumentFragment);
+        }
     }
 
     private _createOverriddenMethods () {
@@ -455,11 +486,13 @@ export default class ElementSandbox extends SandboxBase {
         const sandbox = this;
 
         this.overriddenMethods = {
-            appendData (text) {
+            appendData (this: CharacterData, text: string) {
+                const parentNode = nativeMethods.nodeParentNodeGetter.call(this);
+
                 nativeMethods.nodeTextContentSetter.call(this, nativeMethods.nodeTextContentGetter.call(this) + text);
 
-                if (nativeMethods.nodeParentNodeGetter.call(this))
-                    ElementSandbox._processTextNodeContent(this, nativeMethods.nodeParentNodeGetter.call(this));
+                if (parentNode)
+                    this.data = ElementSandbox._processTextContent(this.data, parentNode);
             },
 
             insertRow () {
@@ -489,7 +522,7 @@ export default class ElementSandbox extends SandboxBase {
 
                 if (args.length > 1 && html !== null) {
                     args[1] = processHtml(String(html), {
-                        parentTag:        parentEl && parentEl.tagName,
+                        parentTag:        parentEl && parentEl['tagName'],
                         processedContext: el[INTERNAL_PROPS.processedContext]
                     });
                 }
@@ -519,45 +552,40 @@ export default class ElementSandbox extends SandboxBase {
                 return null;
             },
 
-            insertBefore (...args) {
-                return sandbox._addNodeCore({
-                    parentNode: this,
-                    nativeFn:   nativeMethods.insertBefore,
-                    checkBody:  !args[1],
-
-                    args
-                });
+            insertBefore (this: Node & ParentNode, ...args: Parameters<Node['insertBefore']>) {
+                return sandbox._addNodeCore(this, [args[0]], args, nativeMethods.insertBefore, !args[1]);
             },
 
-            appendChild (...args) {
-                return sandbox._addNodeCore({
-                    parentNode: this,
-                    nativeFn:   nativeMethods.appendChild,
-                    checkBody:  true,
-
-                    args
-                });
+            appendChild (this: Node & ParentNode, ...args: Parameters<Node['appendChild']>) {
+                return sandbox._addNodeCore(this, [args[0]], args, nativeMethods.appendChild);
             },
 
-            removeChild () {
-                const child = arguments[0];
-
-                sandbox._onRemoveFileInputInfo(child);
-                sandbox._onRemoveIframe(child);
-
-                const result = nativeMethods.removeChild.apply(this, arguments);
-
-                sandbox._onElementRemoved(child);
-
-                return result;
+            append (this: Element, ...args: Parameters<Element['append']>) {
+                return sandbox._addNodeCore(this, args, args, nativeMethods.append);
             },
 
-            replaceChild () {
-                const newChild = arguments[0];
-                const oldChild = arguments[1];
+            removeChild (this: Node) {
+                // NOTE: We are created the args array manually because of the test for the GH-1231 issue.
+                // Babel process the spread operator same as `for..of` loop, and IE11 throws an error
+                // when array is created through `new Array(len)`.
+                const args   = [];
+                const length = arguments.length
+
+                for (let i = 0; i < length; i++)
+                    args.push(arguments[i]);
+
+                return sandbox._removeNodeCore(this, args as Parameters<Node['removeChild']>, args[0], nativeMethods.removeChild);
+            },
+
+            remove (this: Element, ...args: Parameters<Element['remove']>) {
+                return sandbox._removeNodeCore(this, args, this, nativeMethods.remove);
+            },
+
+            replaceChild (this: Node, ...args: Parameters<Node['replaceChild']>) {
+                const [newChild, oldChild] = args;
 
                 if (domUtils.isTextNode(newChild))
-                    ElementSandbox._processTextNodeContent(newChild, this);
+                    newChild.data = ElementSandbox._processTextContent(newChild.data, this);
 
                 sandbox._onRemoveFileInputInfo(oldChild);
 
@@ -576,6 +604,14 @@ export default class ElementSandbox extends SandboxBase {
                 sandbox._nodeSandbox.processNodes(clone);
 
                 return clone;
+            },
+
+            attachShadow (...args: Parameters<Element['attachShadow']>) {
+                const root = nativeMethods.attachShadow.apply(this, args);
+
+                nativeMethods.objectDefineProperty(root, domUtils.SHADOW_ROOT_PARENT_ELEMENT, { value: this });
+
+                return root;
             },
 
             getAttribute () {
@@ -670,14 +706,17 @@ export default class ElementSandbox extends SandboxBase {
         };
     }
 
-    private static _processTextNodeContent (node, parentNode): void {
-        if (!parentNode.tagName)
-            return;
+    private static _processTextContent (str: string, parentNode: Node): string {
+        if (!parentNode['tagName'])
+            return str;
 
         if (domUtils.isScriptElement(parentNode))
-            node.data = processScript(node.data, true, false, urlUtils.convertToProxyUrl);
-        else if (domUtils.isStyleElement(parentNode))
-            node.data = styleProcessor.process(node.data, urlUtils.getProxyUrl);
+            return processScript(str, true, false, urlUtils.convertToProxyUrl);
+
+        if (domUtils.isStyleElement(parentNode))
+            return styleProcessor.process(str, urlUtils.getProxyUrl);
+
+        return str;
     }
 
     private static _isHrefAttrForBaseElement (el: HTMLElement, attr: string): boolean {
@@ -688,7 +727,7 @@ export default class ElementSandbox extends SandboxBase {
         hiddenInfo.removeInputInfo(el);
     }
 
-    private static _hasShadowUIParentOrContainsShadowUIClassPostfix (el: HTMLElement): boolean {
+    private static _hasShadowUIParentOrContainsShadowUIClassPostfix (el: Node): boolean {
         const parent = nativeMethods.nodeParentNodeGetter.call(el);
 
         return parent && domUtils.isShadowUIElement(parent) || ShadowUI.containsShadowUIClassPostfix(el);
@@ -700,7 +739,7 @@ export default class ElementSandbox extends SandboxBase {
         return nativeMethods.querySelector.call(doc, 'base') === el;
     }
 
-    private _onAddFileInputInfo (el: HTMLElement): void {
+    private _onAddFileInputInfo (el): void {
         if (!domUtils.isDomElement(el))
             return;
 
@@ -710,7 +749,7 @@ export default class ElementSandbox extends SandboxBase {
             this.addFileInputInfo(fileInput);
     }
 
-    private _onRemoveFileInputInfo (el: HTMLInputElement): void {
+    private _onRemoveFileInputInfo (el: Node): void {
         if (!domUtils.isDomElement(el))
             return;
 
@@ -720,12 +759,12 @@ export default class ElementSandbox extends SandboxBase {
             domUtils.find(el, 'input[type=file]', ElementSandbox._removeFileInputInfo);
     }
 
-    private _onRemoveIframe (el: HTMLIFrameElement): void {
+    private _onRemoveIframe (el: Node): void {
         if (domUtils.isDomElement(el) && domUtils.isIframeElement(el))
             windowsStorage.remove(nativeMethods.contentWindowGetter.call(el));
     }
 
-    private _onElementAdded (el: HTMLElement): void {
+    private _onElementAdded (el: Node): void {
         if (ElementSandbox._hasShadowUIParentOrContainsShadowUIClassPostfix(el))
             ShadowUI.markElementAndChildrenAsShadow(el);
 
@@ -765,7 +804,7 @@ export default class ElementSandbox extends SandboxBase {
         }
     }
 
-    private _onElementRemoved (el: HTMLElement): void {
+    private _onElementRemoved (el: Node): void {
         if (domUtils.isBodyElement(el))
             this._shadowUI.onBodyElementMutation();
 
@@ -796,39 +835,56 @@ export default class ElementSandbox extends SandboxBase {
 
         this._createOverriddenMethods();
 
-        window.Element.prototype.setAttribute              = this.overriddenMethods.setAttribute;
-        window.Element.prototype.setAttributeNS            = this.overriddenMethods.setAttributeNS;
-        window.Element.prototype.getAttribute              = this.overriddenMethods.getAttribute;
-        window.Element.prototype.getAttributeNS            = this.overriddenMethods.getAttributeNS;
-        window.Element.prototype.removeAttribute           = this.overriddenMethods.removeAttribute;
-        window.Element.prototype.removeAttributeNS         = this.overriddenMethods.removeAttributeNS;
-        window.Element.prototype.cloneNode                 = this.overriddenMethods.cloneNode;
-        window.Element.prototype.querySelector             = this.overriddenMethods.querySelector;
-        window.Element.prototype.querySelectorAll          = this.overriddenMethods.querySelectorAll;
-        window.Element.prototype.hasAttribute              = this.overriddenMethods.hasAttribute;
-        window.Element.prototype.hasAttributeNS            = this.overriddenMethods.hasAttributeNS;
-        window.Element.prototype.hasAttributes             = this.overriddenMethods.hasAttributes;
-        window.Node.prototype.cloneNode                    = this.overriddenMethods.cloneNode;
-        window.Node.prototype.appendChild                  = this.overriddenMethods.appendChild;
-        window.Node.prototype.removeChild                  = this.overriddenMethods.removeChild;
-        window.Node.prototype.insertBefore                 = this.overriddenMethods.insertBefore;
-        window.Node.prototype.replaceChild                 = this.overriddenMethods.replaceChild;
-        window.DocumentFragment.prototype.querySelector    = this.overriddenMethods.querySelector;
-        window.DocumentFragment.prototype.querySelectorAll = this.overriddenMethods.querySelectorAll;
-        window.HTMLTableElement.prototype.insertRow        = this.overriddenMethods.insertRow;
-        window.HTMLTableSectionElement.prototype.insertRow = this.overriddenMethods.insertRow;
-        window.HTMLTableRowElement.prototype.insertCell    = this.overriddenMethods.insertCell;
-        window.HTMLFormElement.prototype.submit            = this.overriddenMethods.formSubmit;
-        window.HTMLAnchorElement.prototype.toString        = this.overriddenMethods.anchorToString;
-        window.CharacterData.prototype.appendData          = this.overriddenMethods.appendData;
+        overrideFunction(window.Element.prototype, 'setAttribute', this.overriddenMethods.setAttribute);
+        overrideFunction(window.Element.prototype, 'setAttributeNS', this.overriddenMethods.setAttributeNS);
+        overrideFunction(window.Element.prototype, 'getAttribute', this.overriddenMethods.getAttribute);
+        overrideFunction(window.Element.prototype, 'getAttributeNS', this.overriddenMethods.getAttributeNS);
+        overrideFunction(window.Element.prototype, 'removeAttribute', this.overriddenMethods.removeAttribute);
+        overrideFunction(window.Element.prototype, 'removeAttributeNS', this.overriddenMethods.removeAttributeNS);
+        overrideFunction(window.Element.prototype, 'cloneNode', this.overriddenMethods.cloneNode);
+        overrideFunction(window.Element.prototype, 'querySelector', this.overriddenMethods.querySelector);
+        overrideFunction(window.Element.prototype, 'querySelectorAll', this.overriddenMethods.querySelectorAll);
+        overrideFunction(window.Element.prototype, 'hasAttribute', this.overriddenMethods.hasAttribute);
+        overrideFunction(window.Element.prototype, 'hasAttributeNS', this.overriddenMethods.hasAttributeNS);
+        overrideFunction(window.Element.prototype, 'hasAttributes', this.overriddenMethods.hasAttributes);
+
+        if (nativeMethods.attachShadow)
+            overrideFunction(window.Element.prototype, 'attachShadow', this.overriddenMethods.attachShadow);
+
+        overrideFunction(window.Node.prototype, 'cloneNode', this.overriddenMethods.cloneNode);
+        overrideFunction(window.Node.prototype, 'appendChild', this.overriddenMethods.appendChild);
+        overrideFunction(window.Node.prototype, 'removeChild', this.overriddenMethods.removeChild);
+        overrideFunction(window.Node.prototype, 'insertBefore', this.overriddenMethods.insertBefore);
+        overrideFunction(window.Node.prototype, 'replaceChild', this.overriddenMethods.replaceChild);
+
+        if (nativeMethods.append)
+            overrideFunction(window.Element.prototype, 'append', this.overriddenMethods.append);
+
+        if (nativeMethods.remove)
+            overrideFunction(window.Element.prototype, 'remove', this.overriddenMethods.remove);
+
+        overrideFunction(window.DocumentFragment.prototype, 'querySelector', this.overriddenMethods.querySelector);
+        overrideFunction(window.DocumentFragment.prototype, 'querySelectorAll', this.overriddenMethods.querySelectorAll);
+
+        overrideFunction(window.HTMLTableElement.prototype, 'insertRow', this.overriddenMethods.insertRow);
+
+        overrideFunction(window.HTMLTableSectionElement.prototype, 'insertRow', this.overriddenMethods.insertRow);
+
+        overrideFunction(window.HTMLTableRowElement.prototype, 'insertCell', this.overriddenMethods.insertCell);
+
+        overrideFunction(window.HTMLFormElement.prototype, 'submit', this.overriddenMethods.formSubmit);
+
+        overrideFunction(window.HTMLAnchorElement.prototype, 'toString', this.overriddenMethods.anchorToString);
+
+        overrideFunction(window.CharacterData.prototype, 'appendData', this.overriddenMethods.appendData);
 
         if (window.Document.prototype.registerElement)
-            window.Document.prototype.registerElement = this.overriddenMethods.registerElement;
+            overrideFunction(window.Document.prototype, 'registerElement', this.overriddenMethods.registerElement);
 
         if (window.Element.prototype.insertAdjacentHTML)
-            window.Element.prototype.insertAdjacentHTML = this.overriddenMethods.insertAdjacentHTML;
+            overrideFunction(window.Element.prototype, 'insertAdjacentHTML', this.overriddenMethods.insertAdjacentHTML);
         else if (window.HTMLElement.prototype.insertAdjacentHTML)
-            window.HTMLElement.prototype.insertAdjacentHTML = this.overriddenMethods.insertAdjacentHTML;
+            overrideFunction(window.HTMLElement.prototype, 'insertAdjacentHTML', this.overriddenMethods.insertAdjacentHTML);
 
         this._setValidBrowsingContextOnElementClick(window);
 
@@ -867,7 +923,7 @@ export default class ElementSandbox extends SandboxBase {
 
     private _setValidBrowsingContextOnElementClick (window): void {
         this._eventSandbox.listeners.initElementListening(window, ['click']);
-        this._eventSandbox.listeners.addInternalEventListener(window, ['click'], e => {
+        this._eventSandbox.listeners.addInternalEventBeforeListener(window, ['click'], e => {
             let el = e.target;
 
             if (domUtils.isInputElement(el) && el.form)
@@ -908,7 +964,7 @@ export default class ElementSandbox extends SandboxBase {
 
     private _handleImageLoadEventRaising (el: HTMLImageElement): void {
         this._eventSandbox.listeners.initElementListening(el, ['load']);
-        this._eventSandbox.listeners.addInternalEventListener(el, ['load'], (_e, _dispatched, preventEvent, _cancelHandlers, stopEventPropagation) => {
+        this._eventSandbox.listeners.addInternalEventBeforeListener(el, ['load'], (_e, _dispatched, preventEvent, _cancelHandlers, stopEventPropagation) => {
             if (el[INTERNAL_PROPS.cachedImage])
                 el[INTERNAL_PROPS.cachedImage] = false;
 
@@ -936,14 +992,14 @@ export default class ElementSandbox extends SandboxBase {
             urlResolver.updateBase(storedUrlAttr, el.ownerDocument || this.document);
     }
 
-    private _reProcessElementWithTargetAttr (el: HTMLElement, tagName: string): void {
+    private _reProcessElementWithTargetAttr (el: Element, tagName: string): void {
         const targetAttr = domProcessor.getTargetAttr(el);
 
         if (DomProcessor.isIframeFlagTag(tagName) && nativeMethods.getAttribute.call(el, targetAttr) === '_parent')
             domProcessor.processElement(el, urlUtils.convertToProxyUrl);
     }
 
-    processElement (el: HTMLElement): void {
+    processElement (el: Element): void {
         const tagName = domUtils.getTagName(el);
 
         switch (tagName) {

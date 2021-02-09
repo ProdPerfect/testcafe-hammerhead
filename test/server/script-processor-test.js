@@ -1150,6 +1150,20 @@ describe('Script processor', () => {
             ]);
         });
 
+        it('duplicate destructuring', () => {
+            testProcessing([
+                {
+                    src: 'const { A: { C }, A: { B } } = obj;',
+
+                    expected: 'const _hh$temp0 = obj,' +
+                              '    _hh$temp0$A = _hh$temp0.A,' +
+                              '    C = _hh$temp0$A.C,' +
+                              '    _hh$temp0$A$i1 = _hh$temp0.A,' +
+                              '    B = _hh$temp0$A$i1.B;'
+                }
+            ]);
+        });
+
         it('Should not process destructuring', () => {
             testProcessing([
                 {
@@ -1351,6 +1365,44 @@ describe('Script processor', () => {
                               '}'
                 }
             ]);
+        });
+
+        it('Should not lose parentheses inside the computed property (GH-2442)', () => {
+            testProcessing([
+                {
+                    src: 'Object.assign({}, { [(a, b)]: c } )',
+
+                    expected: '__call$(Object, "assign", [{}, { [(a, b)]: c }])'
+                }
+            ]);
+        });
+
+        it('Should not lose parentheses inside the for..of loop (GH-2573)', () => {
+            testProcessing({
+                src: 'i[j] = () => {' +
+                     '    for (var x of (a, b))' +
+                     '        c();' +
+                     '}',
+
+                expected: '__set$(i, j, () => {' +
+                          '    for (var x of (a, b))' +
+                          '        c();' +
+                          '})'
+            });
+        });
+
+        it('Should not lose await keyword in "for await...of" loop', () => {
+            testProcessing({
+                src: 'i[j] = async () => {' +
+                     '    for await (let num of asyncIterable)' +
+                     '        x += num;' +
+                     '};',
+
+                expected: '__set$(i, j, async () => {' +
+                          '    for await (let num of asyncIterable)' +
+                          '        x += num;' +
+                          '});',
+            });
         });
     });
 });

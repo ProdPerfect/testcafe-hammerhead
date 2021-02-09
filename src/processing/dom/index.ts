@@ -7,7 +7,15 @@ import INTERNAL_ATTRS from '../../processing/dom/internal-attributes';
 import SHADOW_UI_CLASSNAME from '../../shadow-ui/class-name';
 import { isScriptProcessed, processScript } from '../script';
 import styleProcessor from '../../processing/style';
-import * as urlUtils from '../../utils/url';
+import {
+    parseProxyUrl,
+    getResourceTypeString,
+    HASH_RE,
+    resolveUrlAsDest,
+    parseUrl,
+    isSpecialPage,
+    isSupportedProtocol
+} from '../../utils/url';
 import trim from '../../utils/string-trim';
 import BUILTIN_HEADERS from '../../request-pipeline/builtin-header-names';
 import { XML_NAMESPACE } from './namespaces';
@@ -33,6 +41,7 @@ const INTEGRITY_ATTR_TAGS = ['script', 'link'];
 const IFRAME_FLAG_TAGS    = ['a', 'form', 'area', 'input', 'button'];
 
 const PROCESSED_PRELOAD_LINK_CONTENT_TYPE = 'script';
+const MODULE_PRELOAD_LINK_REL             = 'modulepreload';
 
 const ELEMENT_PROCESSED = 'hammerhead|element-processed';
 
@@ -46,19 +55,21 @@ interface ElementProcessingPattern {
     relAttr?: string;
 }
 
+type UrlReplacer = (url: string, resourceType?: string, charset?: string, isCrossDomain?: boolean) => string;
+
 export default class DomProcessor {
+    readonly HTML_PROCESSING_REQUIRED_EVENT = 'hammerhead|event|html-processing-required';
     SVG_XLINK_HREF_TAGS: string[] = SVG_XLINK_HREF_TAGS;
-    AUTOCOMPLETE_ATTRIBUTE_ABSENCE_MARKER: string = AUTOCOMPLETE_ATTRIBUTE_ABSENCE_MARKER;
-    PROCESSED_PRELOAD_LINK_CONTENT_TYPE: string = PROCESSED_PRELOAD_LINK_CONTENT_TYPE;
+    AUTOCOMPLETE_ATTRIBUTE_ABSENCE_MARKER = AUTOCOMPLETE_ATTRIBUTE_ABSENCE_MARKER;
+    PROCESSED_PRELOAD_LINK_CONTENT_TYPE = PROCESSED_PRELOAD_LINK_CONTENT_TYPE;
+    MODULE_PRELOAD_LINK_REL = MODULE_PRELOAD_LINK_REL;
     private readonly elementProcessorPatterns: ElementProcessingPattern[];
-    forceProxySrcForImage: boolean = false;
-    allowMultipleWindows: boolean = false;
+    forceProxySrcForImage = false;
+    allowMultipleWindows = false;
     // Refactor this, see BaseDomAdapter;
     EVENTS: string[];
 
     constructor (public readonly adapter: BaseDomAdapter) {
-        this.adapter.attachEventEmitter(this);
-
         this.EVENTS = this.adapter.EVENTS;
         this.elementProcessorPatterns = this._createProcessorPatterns(this.adapter);
     }
@@ -132,6 +143,12 @@ export default class DomProcessor {
             HAS_MANIFEST_ATTR: (el: HTMLElement) => this.isUrlAttr(el, 'manifest'),
 
             HAS_DATA_ATTR: (el: HTMLElement) => this.isUrlAttr(el, 'data'),
+
+            HAS_SRCDOC_ATTR: (el: HTMLElement) => {
+                const tagName = this.adapter.getTagName(el);
+
+                return (tagName === 'iframe' || tagName === 'frame') && adapter.hasAttr(el, 'srcdoc');
+            },
 
             HTTP_EQUIV_META: (el: HTMLElement) => {
                 const tagName = adapter.getTagName(el);
@@ -213,6 +230,10 @@ export default class DomProcessor {
                 elementProcessors: [this._processUrlAttrs, this._processUrlJsAttr]
             },
             {
+                selector:          selectors.HAS_SRCDOC_ATTR,
+                elementProcessors: [this._processSrcdocAttr]
+            },
+            {
                 selector:          selectors.HTTP_EQUIV_META,
                 urlAttr:           'content',
                 elementProcessors: [this._processMetaElement]
@@ -247,7 +268,7 @@ export default class DomProcessor {
     }
 
     // API
-    processElement (el: HTMLElement, urlReplacer: Function): void {
+    processElement (el: Element, urlReplacer: UrlReplacer): void {
         // @ts-ignore
         if (el[ELEMENT_PROCESSED])
             return;
@@ -267,14 +288,11 @@ export default class DomProcessor {
     getElementResourceType (el: HTMLElement): string | null {
         const tagName = this.adapter.getTagName(el);
 
-        if (tagName === 'link') {
-            const asAttr = this._getAsAttribute(el);
+        if (tagName === 'link' && (this._getAsAttribute(el) === PROCESSED_PRELOAD_LINK_CONTENT_TYPE ||
+                                   this._getRelAttribute(el) === MODULE_PRELOAD_LINK_REL))
+            return getResourceTypeString({ isScript: true });
 
-            if (PROCESSED_PRELOAD_LINK_CONTENT_TYPE === asAttr)
-                return urlUtils.getResourceTypeString({ isScript: true });
-        }
-
-        return urlUtils.getResourceTypeString({
+        return getResourceTypeString({
             isIframe:     tagName === 'iframe' || tagName === 'frame' || this._isOpenLinkInIframe(el),
             isForm:       tagName === 'form' || tagName === 'input' || tagName === 'button',
             isScript:     tagName === 'script',
@@ -294,7 +312,7 @@ export default class DomProcessor {
         return this.adapter.isSVGElement(el) && (attr === 'xml:base' || attr === 'base' && ns === XML_NAMESPACE);
     }
 
-    getUrlAttr (el: HTMLElement): string | null {
+    getUrlAttr (el: Element): string | null {
         const tagName = this.adapter.getTagName(el);
 
         for (const urlAttr of URL_ATTRS) {
@@ -306,7 +324,7 @@ export default class DomProcessor {
         return null;
     }
 
-    getTargetAttr (el: HTMLElement | ASTNode): string | null {
+    getTargetAttr (el: Element | ASTNode): string | null {
         const tagName = this.adapter.getTagName(el);
 
         for (const targetAttr of TARGET_ATTRS) {
@@ -340,7 +358,7 @@ export default class DomProcessor {
         return false;
     }
 
-    _isShadowElement (el: HTMLElement): boolean {
+    _isShadowElement (el: Element): boolean {
         const className = this.adapter.getClassName(el);
 
         return typeof className === 'string' && className.indexOf(SHADOW_UI_CLASSNAME.postfix) > -1;
@@ -393,7 +411,7 @@ export default class DomProcessor {
 
     // NOTE: We simply remove the 'rel' attribute if rel='prefetch' and use stored 'rel' attribute, because the prefetch
     // resource type is unknown. https://github.com/DevExpress/testcafe/issues/2528
-    _processRelPrefetch (el: HTMLElement, _urlReplacer: object, pattern: ElementProcessingPattern): void {
+    _processRelPrefetch (el: HTMLElement, _urlReplacer: UrlReplacer, pattern: ElementProcessingPattern): void {
         const storedRelAttr = DomProcessor.getStoredAttrName(pattern.relAttr);
         const processed     = this.adapter.hasAttr(el, storedRelAttr) && !this.adapter.hasAttr(el, pattern.relAttr);
         const attrValue     = this.adapter.getAttr(el, processed ? storedRelAttr : pattern.relAttr);
@@ -418,7 +436,6 @@ export default class DomProcessor {
 
         if (attrValue !== processedValue) {
             this.adapter.setAttr(el, storedUrlAttr, attrValue);
-
             this.adapter.setAttr(el, attrName, processedValue);
         }
     }
@@ -438,7 +455,7 @@ export default class DomProcessor {
         }
     }
 
-    _processMetaElement (el: HTMLElement, urlReplacer, pattern: ElementProcessingPattern): void {
+    _processMetaElement (el: HTMLElement, urlReplacer: UrlReplacer, pattern: ElementProcessingPattern): void {
         const httpEquivAttrValue = this.adapter.getAttr(el, 'http-equiv').toLowerCase();
 
         if (httpEquivAttrValue === BUILTIN_HEADERS.refresh) {
@@ -471,7 +488,7 @@ export default class DomProcessor {
         this.adapter.setAttr(el, 'sandbox', attrValue);
     }
 
-    _processScriptElement (script: HTMLElement, urlReplacer: Function): void {
+    _processScriptElement (script: HTMLElement, urlReplacer: UrlReplacer): void {
         const scriptContent = this.adapter.getScriptContent(script);
 
         if (!scriptContent || !this.adapter.needToProcessContent(script))
@@ -520,14 +537,14 @@ export default class DomProcessor {
         }
     }
 
-    _processStyleAttr (el: HTMLElement, urlReplacer): void {
+    _processStyleAttr (el: HTMLElement, urlReplacer: UrlReplacer): void {
         const style = this.adapter.getAttr(el, 'style');
 
         if (style)
             this.adapter.setAttr(el, 'style', styleProcessor.process(style, urlReplacer, false));
     }
 
-    _processStylesheetElement (el: HTMLElement, urlReplacer): void {
+    _processStylesheetElement (el: HTMLElement, urlReplacer: UrlReplacer): void {
         let content = this.adapter.getStyleContent(el);
 
         if (content && urlReplacer && this.adapter.needToProcessContent(el)) {
@@ -537,7 +554,7 @@ export default class DomProcessor {
         }
     }
 
-    _processTargetBlank (el: HTMLElement, _urlReplacer, pattern: ElementProcessingPattern): void {
+    _processTargetBlank (el: HTMLElement, _urlReplacer: UrlReplacer, pattern: ElementProcessingPattern): void {
         if (this.allowMultipleWindows)
             return;
 
@@ -558,89 +575,69 @@ export default class DomProcessor {
         }
     }
 
-    _processUrlAttrs (el: HTMLElement, urlReplacer, pattern: ElementProcessingPattern): void {
-        if (urlReplacer && pattern.urlAttr) {
-            const storedUrlAttr     = DomProcessor.getStoredAttrName(pattern.urlAttr);
-            let resourceUrl         = this.adapter.getAttr(el, pattern.urlAttr);
-            const isSpecialPage     = urlUtils.isSpecialPage(resourceUrl);
-            const processedOnServer = this.adapter.hasAttr(el, storedUrlAttr);
+    _processUrlAttrs (el: HTMLElement, urlReplacer: UrlReplacer, pattern: ElementProcessingPattern): void {
+        const storedUrlAttr     = DomProcessor.getStoredAttrName(pattern.urlAttr);
+        const resourceUrl       = this.adapter.getAttr(el, pattern.urlAttr);
+        const isSpecialPageUrl  = isSpecialPage(resourceUrl);
+        const processedOnServer = this.adapter.hasAttr(el, storedUrlAttr);
 
-            // NOTE: Page resource URL with proxy URL.
-            if ((resourceUrl || resourceUrl === '') && !processedOnServer) {
-                if (urlUtils.isSupportedProtocol(resourceUrl) || isSpecialPage) {
-                    const elTagName = this.adapter.getTagName(el);
-                    const isIframe  = elTagName === 'iframe' || elTagName === 'frame';
-                    const isScript  = elTagName === 'script';
-                    const isAnchor  = elTagName === 'a';
-                    const target    = this.adapter.getAttr(el, pattern.targetAttr);
+        if ((!resourceUrl && resourceUrl !== '' || processedOnServer) ||
+            !isSupportedProtocol(resourceUrl) && !isSpecialPageUrl)
+            return;
 
-                    // NOTE: Elements with target=_parent shouldn’t be processed on the server,because we don't
-                    // know what is the parent of the processed page (an iframe or the top window).
-                    if (!this.adapter.needToProcessUrl(elTagName, target))
-                        return;
+        const elTagName = this.adapter.getTagName(el);
+        const isIframe  = elTagName === 'iframe' || elTagName === 'frame';
+        const isScript  = elTagName === 'script';
+        const isAnchor  = elTagName === 'a';
+        const target    = this.adapter.getAttr(el, pattern.targetAttr);
 
-                    const resourceType      = this.getElementResourceType(el);
-                    const parsedResourceUrl = urlUtils.parseUrl(resourceUrl);
-                    const isRelativePath    = parsedResourceUrl.protocol !== 'file:' && !parsedResourceUrl.host;
-                    let proxyUrl            = '';
-                    const charsetAttrValue  = isScript && this.adapter.getAttr(el, 'charset');
+        // NOTE: Elements with target=_parent shouldn’t be processed on the server,because we don't
+        // know what is the parent of the processed page (an iframe or the top window).
+        if (!this.adapter.needToProcessUrl(elTagName, target))
+            return;
 
-                    // NOTE: Only a non-relative iframe src can be cross-domain.
-                    if (isIframe && !isSpecialPage && !isRelativePath) {
-                        const location    = urlReplacer('/');
-                        const proxyUrlObj = urlUtils.parseProxyUrl(location);
-                        const destUrl     = proxyUrlObj.destUrl;
+        const resourceType         = this.getElementResourceType(el);
+        const parsedResourceUrl    = parseUrl(resourceUrl);
+        const isRelativePath       = parsedResourceUrl.protocol !== 'file:' && !parsedResourceUrl.host;
+        const charsetAttrValue     = isScript && this.adapter.getAttr(el, 'charset');
+        const isImgWithoutSrc      = elTagName === 'img' && resourceUrl === '';
+        const isIframeWithEmptySrc = isIframe && resourceUrl === '';
 
-                        if (!parsedResourceUrl.protocol)
-                            resourceUrl = proxyUrlObj.destResourceInfo.protocol + resourceUrl;
+        let isCrossDomainSrc = false;
+        let proxyUrl         = resourceUrl;
 
-                        // NOTE: Cross-domain iframe.
-                        if (!this.adapter.sameOriginCheck(destUrl, resourceUrl)) {
-                            const proxyHostname      = urlUtils.parseUrl(location).hostname;
-                            const proxyPort          = this.adapter.getCrossDomainPort();
-                            const iframeResourceType = urlUtils.getResourceTypeString({ isIframe: true });
+        // NOTE: Only a non-relative iframe src can be cross-domain.
+        if (isIframe && !isSpecialPageUrl && !isRelativePath)
+            isCrossDomainSrc = !this.adapter.sameOriginCheck(parseProxyUrl(urlReplacer('/')).destUrl, resourceUrl);
 
-                            proxyUrl = resourceUrl ? this.adapter.getProxyUrl(resourceUrl, {
-                                proxyHostname,
-                                proxyPort,
-
-                                sessionId:    proxyUrlObj.sessionId,
-                                resourceType: iframeResourceType
-                            }) : '';
-                        }
-
-                    }
-
-                    if (isSpecialPage && !isAnchor)
-                        proxyUrl = resourceUrl;
-
-                    proxyUrl = proxyUrl === '' && resourceUrl
-                        ? urlReplacer(resourceUrl, resourceType, charsetAttrValue)
-                        : proxyUrl;
-
-                    this.adapter.setAttr(el, storedUrlAttr, resourceUrl);
-
-                    if (elTagName === 'img' && proxyUrl !== '' && !isSpecialPage) {
-                        const attrValue = this.forceProxySrcForImage ? proxyUrl : urlUtils.resolveUrlAsDest(resourceUrl, urlReplacer);
-
-                        this.adapter.setAttr(el, pattern.urlAttr, attrValue);
-                    }
-                    else
-                        this.adapter.setAttr(el, pattern.urlAttr, proxyUrl);
-                }
-            }
+        if ((!isSpecialPageUrl || isAnchor) && !isImgWithoutSrc && !isIframeWithEmptySrc) {
+            proxyUrl = elTagName === 'img' && !this.forceProxySrcForImage
+                ? resolveUrlAsDest(resourceUrl, urlReplacer)
+                : urlReplacer(resourceUrl, resourceType, charsetAttrValue, isCrossDomainSrc);
         }
+
+        this.adapter.setAttr(el, storedUrlAttr, resourceUrl);
+        this.adapter.setAttr(el, pattern.urlAttr, proxyUrl);
     }
 
-    _processUrlJsAttr (el: HTMLElement, _urlReplacer: object, pattern: ElementProcessingPattern): void {
+    _processSrcdocAttr (el: HTMLElement) {
+        const storedAttr    = DomProcessor.getStoredAttrName('srcdoc');
+        const html          = this.adapter.getAttr(el, 'srcdoc');
+        const processedHtml = this.adapter.processSrcdocAttr(html);
+
+        this.adapter.setAttr(el, storedAttr, html);
+        this.adapter.setAttr(el, 'srcdoc', processedHtml);
+    }
+
+    _processUrlJsAttr (el: HTMLElement, _urlReplacer: UrlReplacer, pattern: ElementProcessingPattern): void {
         if (DomProcessor.isJsProtocol(this.adapter.getAttr(el, pattern.urlAttr)))
             this._processJsAttr(el, pattern.urlAttr, { isJsProtocol: true, isEventAttr: false });
     }
 
-    _processSVGXLinkHrefAttr (el: HTMLElement, _urlReplacer: object, pattern: ElementProcessingPattern): void {
+    _processSVGXLinkHrefAttr (el: HTMLElement, _urlReplacer: UrlReplacer, pattern: ElementProcessingPattern): void {
         const attrValue = this.adapter.getAttr(el, pattern.urlAttr);
 
-        if (urlUtils.HASH_RE.test(attrValue)) {
+        if (HASH_RE.test(attrValue)) {
             const storedUrlAttr = DomProcessor.getStoredAttrName(pattern.urlAttr);
 
             this.adapter.setAttr(el, storedUrlAttr, attrValue);

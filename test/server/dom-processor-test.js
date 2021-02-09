@@ -1,36 +1,32 @@
 const expect        = require('chai').expect;
 const parse5        = require('parse5');
+const urlLib        = require('url');
 const DomProcessor  = require('../../lib/processing/dom');
 const processScript = require('../../lib/processing/script').processScript;
 const DomAdapter    = require('../../lib/processing/dom/parse5-dom-adapter');
 const urlUtils      = require('../../lib/utils/url');
 const parse5Utils   = require('../../lib/utils/parse5');
 
-const domAdapter   = new DomAdapter();
+const domAdapter = new DomAdapter();
 
 const testCrossDomainPort = 1338;
 const testProxyHostName   = 'localhost';
 const testProxyPort       = 80;
 
 
-function process (html, isIframe) {
+function process (html, isIframe, replacer) {
     const root             = parse5.parse(html);
     const testDomProcessor = new DomProcessor(new DomAdapter(isIframe, testCrossDomainPort));
-    const urlReplacer      = (url, resourceType) => {
-        if (url.indexOf('//') === 0)
-            url = 'http:' + url;
-        else if (url.indexOf('/') === 0)
-            url = 'http://example.com' + url;
-        else if (url === './')
-            url = 'http://example.com/';
+    const urlReplacer      = replacer || ((resourceUrl, resourceType, charsetAttrValue, isCrossDomain = false) => {
+        resourceUrl = urlLib.resolve('http://example.com/', resourceUrl);
 
-        return urlUtils.getProxyUrl(url, {
-            proxyHostname: 'localhost',
-            proxyPort:     '80',
+        return urlUtils.getProxyUrl(resourceUrl, {
+            proxyHostname: testProxyHostName,
+            proxyPort:     (isCrossDomain ? testCrossDomainPort : testProxyPort).toString(),
             sessionId:     'sessionId',
             resourceType:  resourceType
         });
-    };
+    });
 
     parse5Utils.walkElements(root, el => testDomProcessor.processElement(el, urlReplacer));
 
@@ -50,15 +46,14 @@ describe('DOM processor', () => {
         const root = process('<html><head></head><body><iframe sandbox="allow-forms"></iframe></body></html>');
 
         expect(parse5.serialize(root)).contains('<iframe sandbox="allow-forms allow-same-origin allow-scripts" ' +
-                                                                 DomProcessor.getStoredAttrName('sandbox') +
-                                                                 '="allow-forms">');
+                                                DomProcessor.getStoredAttrName('sandbox') + '="allow-forms">');
     });
 
     it('Should process style attribute', () => {
-        const root = process('<div style="background: url(\'http://example.com/style.css\')"></div>');
+        const root = process('<div style="background: url(http://example.com/style.css)"></div>');
 
-        expect(parse5.serialize(root)).eql('<html><head></head><body><div style="background: ' +
-                                                            'url(\'http://localhost:80/sessionId/http://example.com/style.css\')"></div></body></html>');
+        expect(parse5.serialize(root)).eql('<html><head></head><body>' +
+            '<div style="background: url(http://localhost:80/sessionId/http://example.com/style.css)"></div></body></html>');
     });
 
     it('Should process <script> src', () => {
@@ -117,33 +112,6 @@ describe('DOM processor', () => {
         expect(domAdapter.getAttr(img, DomProcessor.getStoredAttrName('src'))).eql('about:blank');
     });
 
-    it.skip('Should process <iframe> with src', () => {
-        // TODO: Rewrite moving url replacer to the page processor.
-        //var $iframe                            = whacko.load('<iframe src="http://cross.domain.com/"></iframe>'),
-        //    expectedHtml                       = '<iframe src="http://proxy.cross.domain.com/" src' +
-        //                                         sharedConst.DOM_SANDBOX_STORED_ATTR_POSTFIX +
-        //                                         '="http://cross.domain.com/"></iframe>',
-        //
-        //    storedGetCrossDomainIframeProxyUrl = urlUtil.getCrossDomainIframeProxyUrl,
-        //    storedGetProxyUrl                  = urlUtil.getProxyUrl;
-        //
-        //urlUtil.getCrossDomainIframeProxyUrl = function () {
-        //    return 'http://proxy.cross.domain.com/';
-        //};
-        //
-        //urlUtil.getProxyUrl = function () {
-        //    return 'http://proxy.com/-!id-ow!-/http://host';
-        //};
-        //
-        //domProcessor.processPage($iframe, urlUtil.getProxyUrl);
-        //
-        //urlUtil.getCrossDomainIframeProxyUrl = storedGetCrossDomainIframeProxyUrl;
-        //urlUtil.getProxyUrl                  = storedGetProxyUrl;
-        //
-        //t.ok($iframe.html().indexOf(expectedHtml) !== -1);
-        //t.done();
-    });
-
     it('Should process target attribute for the elements in <iframe>', () => {
         let root = process('<a id="a" href="http://example.com"></a>' +
                              '<form id="form_simple" action="http://example.com"></form>' +
@@ -187,6 +155,47 @@ describe('DOM processor', () => {
 
         expect(crossDomainIframeSrc).eql(crossDomainProxyUrl);
         expect(iframeSrc).eql(proxyUrl);
+    });
+
+    it('Should process iframe with cross-domain src', () => {
+        const root          = process('<iframe src="http://cross.domain.com/"></iframe>');
+        const iframe        = parse5Utils.findElementsByTagNames(root, 'iframe').iframe[0];
+        const storedSrcAttr = DomProcessor.getStoredAttrName('src');
+
+        expect(domAdapter.getAttr(iframe, 'src')).eql('http://localhost:' +
+            testCrossDomainPort + '/sessionId!i/http://cross.domain.com/');
+        expect(domAdapter.getAttr(iframe, storedSrcAttr)).eql('http://cross.domain.com/');
+    });
+
+    it('Should process iframe in https mode correctly', () => {
+        const urlReplacer = (resourceUrl, resourceType) => {
+            resourceUrl = urlLib.resolve('http://example.com/', resourceUrl);
+
+            return urlUtils.getProxyUrl(resourceUrl, {
+                proxyHostname: testProxyHostName,
+                proxyPort:     testProxyPort,
+                proxyProtocol: 'https:',
+                sessionId:     'sessionId',
+                resourceType
+            });
+        };
+
+        const root          = process('<iframe src="http://example.com/"></iframe>', false, urlReplacer);
+        const iframe        = parse5Utils.findElementsByTagNames(root, 'iframe').iframe[0];
+        const storedSrcAttr = DomProcessor.getStoredAttrName('src');
+
+        expect(domAdapter.getAttr(iframe, 'src')).eql('https://localhost:' +
+            testProxyPort + '/sessionId!i/http://example.com/');
+        expect(domAdapter.getAttr(iframe, storedSrcAttr)).eql('http://example.com/');
+    });
+
+    it('Should process iframe with empty src', () => {
+        const root          = process('<iframe src=""></iframe>');
+        const iframe        = parse5Utils.findElementsByTagNames(root, 'iframe').iframe[0];
+        const storedSrcAttr = DomProcessor.getStoredAttrName('src');
+
+        expect(domAdapter.getAttr(iframe, 'src')).eql('');
+        expect(domAdapter.getAttr(iframe, storedSrcAttr)).eql('');
     });
 
     describe('Regression', () => {

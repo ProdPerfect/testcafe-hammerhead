@@ -11,13 +11,14 @@ import { stopPropagation } from '../utils/event';
 import { getNativeQuerySelectorAll } from '../utils/query-selector';
 import HTMLCollectionWrapper from './node/live-node-list/html-collection-wrapper';
 import { getElementsByNameReturnsHTMLCollection } from '../utils/feature-detection';
-import { isIE } from '../utils/browser';
+import { isIE, isChrome } from '../utils/browser';
 import { DocumentCleanedEvent } from '../../typings/client';
 import NodeMutation from './node/mutation';
 import MessageSandbox from './event/message';
 import IframeSandbox from './iframe';
 import IEDebugSandbox from './ie-debug';
 import removeElement from '../utils/remove-element';
+import { overrideFunction } from '../utils/overriding';
 
 const IS_NON_STATIC_POSITION_RE = /fixed|relative|absolute/;
 const CLASSNAME_RE              = /\.((?:\\.|[-\w]|[^\x00-\xa0])+)/g;
@@ -27,12 +28,12 @@ const IS_SHADOW_CONTAINER_COLLECTION_FLAG = 'hammerhead|shadow-ui|container-coll
 const HTML_COLLECTION_WRAPPER             = 'hammerhead|shadow-ui|html-collection-wrapper';
 
 export default class ShadowUI extends SandboxBase {
-    BODY_CONTENT_CHANGED_COMMAND: string = 'hammerhead|command|body-content-changed';
+    BODY_CONTENT_CHANGED_COMMAND = 'hammerhead|command|body-content-changed';
 
-    ROOT_CLASS: string = 'root';
-    ROOT_ID: string = 'root';
-    HIDDEN_CLASS: string = 'hidden';
-    BLIND_CLASS: string = 'blind';
+    ROOT_CLASS = 'root';
+    ROOT_ID = 'root';
+    HIDDEN_CLASS = 'hidden';
+    BLIND_CLASS = 'blind';
 
     root: any;
     lastActiveElement: any;
@@ -160,7 +161,7 @@ export default class ShadowUI extends SandboxBase {
 
         return {
             getElementsByClassName (nativeGetElementsByClassNameFnName) {
-                return function (...args) {
+                return function (this: HTMLElement, ...args) {
                     const elements = nativeMethods[nativeGetElementsByClassNameFnName].apply(this, args);
                     const length   = nativeMethods.htmlCollectionLengthGetter.call(elements);
 
@@ -169,7 +170,7 @@ export default class ShadowUI extends SandboxBase {
             },
 
             getElementsByTagName (nativeGetElementsByTagNameFnName) {
-                return function (...args) {
+                return function (this: HTMLElement, ...args) {
                     const nativeCollection = nativeMethods[nativeGetElementsByTagNameFnName].apply(this, args);
                     const tagName          = args[0];
 
@@ -190,7 +191,7 @@ export default class ShadowUI extends SandboxBase {
             },
 
             querySelector (nativeQuerySelectorFnName, nativeQuerySelectorAllFnName) {
-                return function (...args) {
+                return function (this: HTMLElement, ...args) {
                     if (typeof args[0] === 'string')
                         args[0] = NodeSandbox.processSelector(args[0]);
 
@@ -205,7 +206,7 @@ export default class ShadowUI extends SandboxBase {
             },
 
             querySelectorAll (nativeQuerySelectorAllFnName) {
-                return function (...args) {
+                return function (this: HTMLElement, ...args) {
                     if (typeof args[0] === 'string')
                         args[0] = NodeSandbox.processSelector(args[0]);
 
@@ -264,7 +265,7 @@ export default class ShadowUI extends SandboxBase {
         const shadowUI = this;
         const docProto = window.Document.prototype;
 
-        docProto.elementFromPoint = function (...args) {
+        overrideFunction(docProto, 'elementFromPoint', function (this: Document, ...args: [number, number]) {
             // NOTE: T212974
             shadowUI.addClass(shadowUI.getRoot(), shadowUI.HIDDEN_CLASS);
 
@@ -273,10 +274,10 @@ export default class ShadowUI extends SandboxBase {
             shadowUI.removeClass(shadowUI.getRoot(), shadowUI.HIDDEN_CLASS);
 
             return res;
-        };
+        });
 
         if (document.caretRangeFromPoint) {
-            docProto.caretRangeFromPoint = function (...args) {
+            overrideFunction(docProto, 'caretRangeFromPoint', function (this: Document, ...args) {
                 shadowUI.addClass(shadowUI.getRoot(), shadowUI.HIDDEN_CLASS);
 
                 let res = nativeMethods.caretRangeFromPoint.apply(this, args);
@@ -287,11 +288,11 @@ export default class ShadowUI extends SandboxBase {
                 shadowUI.removeClass(shadowUI.getRoot(), shadowUI.HIDDEN_CLASS);
 
                 return res;
-            };
+            });
         }
 
         if (document.caretPositionFromPoint) {
-            docProto.caretPositionFromPoint = function (...args) {
+            overrideFunction(docProto, 'caretPositionFromPoint', function (this: Document, ...args) {
                 shadowUI.addClass(shadowUI.getRoot(), shadowUI.HIDDEN_CLASS);
 
                 let res = nativeMethods.caretPositionFromPoint.apply(this, args);
@@ -302,30 +303,26 @@ export default class ShadowUI extends SandboxBase {
                 shadowUI.removeClass(shadowUI.getRoot(), shadowUI.HIDDEN_CLASS);
 
                 return res;
-            };
+            });
         }
 
-        docProto.getElementById = function (...args) {
+        overrideFunction(docProto, 'getElementById', function (this: Document, ...args: [string]) {
             return ShadowUI._filterElement(nativeMethods.getElementById.apply(this, args));
-        };
+        });
 
-        docProto.getElementsByName = function (...args) {
+        overrideFunction(docProto, 'getElementsByName', function (this: Document, ...args: [string]) {
             const elements = nativeMethods.getElementsByName.apply(this, args);
             const length   = getElementsByNameReturnsHTMLCollection
                 ? nativeMethods.htmlCollectionLengthGetter.call(elements)
                 : nativeMethods.nodeListLengthGetter.call(elements);
 
             return shadowUI._filterNodeList(elements, length);
-        };
+        });
 
-        docProto.getElementsByClassName = this.wrapperCreators.getElementsByClassName('getElementsByClassName');
-        docProto.getElementsByTagName   = this.wrapperCreators.getElementsByTagName('getElementsByTagName');
-        docProto.querySelector          = this.wrapperCreators.querySelector('querySelector', 'querySelectorAll');
-        docProto.querySelectorAll       = this.wrapperCreators.querySelectorAll('querySelectorAll');
-
-        // NOTE: T195358
-        docProto.querySelectorAll.toString       = () => nativeMethods.querySelectorAll.toString();
-        docProto.getElementsByClassName.toString = () => nativeMethods.getElementsByClassName.toString();
+        overrideFunction(docProto, 'getElementsByClassName', this.wrapperCreators.getElementsByClassName('getElementsByClassName'));
+        overrideFunction(docProto, 'getElementsByTagName', this.wrapperCreators.getElementsByTagName('getElementsByTagName'));
+        overrideFunction(docProto, 'querySelector', this.wrapperCreators.querySelector('querySelector', 'querySelectorAll'));
+        overrideFunction(docProto, 'querySelectorAll', this.wrapperCreators.querySelectorAll('querySelectorAll'));
     }
 
     _overrideElementMethods (window) {
@@ -333,15 +330,15 @@ export default class ShadowUI extends SandboxBase {
         const bodyProto    = window.HTMLBodyElement.prototype;
         const headProto    = window.HTMLHeadElement.prototype;
 
-        elementProto.getElementsByTagName = this.wrapperCreators.getElementsByTagName('elementGetElementsByTagName');
+        overrideFunction(elementProto, 'getElementsByTagName', this.wrapperCreators.getElementsByTagName('elementGetElementsByTagName'));
 
-        bodyProto.getElementsByClassName = this.wrapperCreators.getElementsByClassName('elementGetElementsByClassName');
-        bodyProto.querySelector          = this.wrapperCreators.querySelector('elementQuerySelector', 'elementQuerySelectorAll');
-        bodyProto.querySelectorAll       = this.wrapperCreators.querySelectorAll('elementQuerySelectorAll');
+        overrideFunction(bodyProto, 'getElementsByClassName', this.wrapperCreators.getElementsByClassName('elementGetElementsByClassName'));
+        overrideFunction(bodyProto, 'querySelector', this.wrapperCreators.querySelector('elementQuerySelector', 'elementQuerySelectorAll'));
+        overrideFunction(bodyProto, 'querySelectorAll', this.wrapperCreators.querySelectorAll('elementQuerySelectorAll'));
 
-        headProto.getElementsByClassName = bodyProto.getElementsByClassName;
-        headProto.querySelector          = bodyProto.querySelector;
-        headProto.querySelectorAll       = bodyProto.querySelectorAll;
+        overrideFunction(headProto, 'getElementsByClassName', bodyProto.getElementsByClassName);
+        overrideFunction(headProto, 'querySelector', bodyProto.querySelector);
+        overrideFunction(headProto, 'querySelectorAll', bodyProto.querySelectorAll);
     }
 
     _getUIStyleSheetsHtml () {
@@ -391,6 +388,10 @@ export default class ShadowUI extends SandboxBase {
     }
 
     getRoot () {
+        // GH-2418
+        if (isChrome && !ShadowUI.isShadowContainer(this.document.body))
+            this._markShadowUIContainerAndCollections(this.document.body);
+
         if (!this.root || /* NOTE: T225944 */ !this.document.body.contains(this.root)) {
             if (!this.root) {
                 // NOTE: B254893
@@ -727,7 +728,7 @@ export default class ShadowUI extends SandboxBase {
         this.lastActiveElement = el;
     }
 
-    insertBeforeRoot (el) {
+    insertBeforeRoot (newNodes: (string | Node)[]) {
         const rootEl          = this.getRoot()
         const rootParent      = this.nativeMethods.nodeParentNodeGetter.call(rootEl);
         const lastParentChild = this.nativeMethods.nodeLastChildGetter.call(rootParent);
@@ -736,7 +737,20 @@ export default class ShadowUI extends SandboxBase {
         if (lastParentChild != rootEl)
             nativeMethods.appendChild.call(rootParent, rootEl);
 
-        return nativeMethods.insertBefore.call(rootParent, el, rootEl);
+        if (newNodes.length > 1 || typeof newNodes[0] !== 'object') {
+            const fragment = document.createDocumentFragment.call(this.document);
+
+            for (let node of newNodes) {
+                if (typeof node === 'string')
+                    node = nativeMethods.createTextNode.call(this.document, node);
+
+                nativeMethods.appendChild.call(fragment, node);
+            }
+
+            return nativeMethods.insertBefore.call(rootParent, fragment, rootEl);
+        }
+
+        return nativeMethods.insertBefore.call(rootParent, newNodes[0] as Node, rootEl);
     }
 
     static markElementAsShadow (el) {

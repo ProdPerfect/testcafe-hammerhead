@@ -1,10 +1,10 @@
 var INTERNAL_PROPS   = hammerhead.get('../processing/dom/internal-properties');
 var DomProcessor     = hammerhead.get('../processing/dom');
 var domProcessor     = hammerhead.get('./dom-processor');
-var settings         = hammerhead.get('./settings');
-var urlUtils         = hammerhead.get('./utils/url');
-var destLocation     = hammerhead.get('./utils/destination-location');
-var featureDetection = hammerhead.get('./utils/feature-detection');
+var settings         = hammerhead.settings;
+var urlUtils         = hammerhead.utils.url;
+var destLocation     = hammerhead.utils.destLocation;
+var featureDetection = hammerhead.utils.featureDetection;
 var processScript    = hammerhead.get('../processing/script').processScript;
 
 var elementEditingWatcher = hammerhead.sandbox.event.elementEditingWatcher;
@@ -136,30 +136,28 @@ test('url attributes overridden by descriptor', function () {
         testUrlAttr(testData[i].tagName, testData[i].attr, testData[i].getter);
 });
 
-if (!browserUtils.isIE || browserUtils.version > 9) {
-    test('formaction attribute in the form', function () {
-        var form   = document.createElement('form');
-        var input  = document.createElement('input');
-        var button = document.createElement('button');
+test('formaction attribute in the form', function () {
+    var form   = document.createElement('form');
+    var input  = document.createElement('input');
+    var button = document.createElement('button');
 
-        input.type = 'submit';
+    input.type = 'submit';
 
-        form.appendChild(input);
-        form.appendChild(button);
+    form.appendChild(input);
+    form.appendChild(button);
 
-        nativeMethods.setAttribute.call(form, 'action', urlUtils.getProxyUrl('./action.html', { resourceType: 'f' }));
-        input.setAttribute('formaction', './input.html');
-        button.setAttribute('formaction', './button.html');
-        strictEqual(urlUtils.parseProxyUrl(nativeMethods.inputFormActionGetter.call(input)).resourceType, 'f');
-        strictEqual(urlUtils.parseProxyUrl(nativeMethods.buttonFormActionGetter.call(button)).resourceType, 'f');
+    nativeMethods.setAttribute.call(form, 'action', urlUtils.getProxyUrl('./action.html', { resourceType: 'f' }));
+    input.setAttribute('formaction', './input.html');
+    button.setAttribute('formaction', './button.html');
+    strictEqual(urlUtils.parseProxyUrl(nativeMethods.inputFormActionGetter.call(input)).resourceType, 'f');
+    strictEqual(urlUtils.parseProxyUrl(nativeMethods.buttonFormActionGetter.call(button)).resourceType, 'f');
 
-        nativeMethods.setAttribute.call(form, 'action', urlUtils.getProxyUrl('./action.html', { resourceType: 'fi' }));
-        input.setAttribute('formaction', './input.html');
-        button.setAttribute('formaction', './button.html');
-        strictEqual(urlUtils.parseProxyUrl(nativeMethods.inputFormActionGetter.call(input)).resourceType, 'fi');
-        strictEqual(urlUtils.parseProxyUrl(nativeMethods.buttonFormActionGetter.call(button)).resourceType, 'fi');
-    });
-}
+    nativeMethods.setAttribute.call(form, 'action', urlUtils.getProxyUrl('./action.html', { resourceType: 'fi' }));
+    input.setAttribute('formaction', './input.html');
+    button.setAttribute('formaction', './button.html');
+    strictEqual(urlUtils.parseProxyUrl(nativeMethods.inputFormActionGetter.call(input)).resourceType, 'fi');
+    strictEqual(urlUtils.parseProxyUrl(nativeMethods.buttonFormActionGetter.call(button)).resourceType, 'fi');
+});
 
 test('set and remove "formtarget" attribute on form child element with existing "formaction" attribute', function () {
     var iframe = document.createElement('iframe');
@@ -583,7 +581,7 @@ if (browserUtils.isChrome) {
 }
 
 test('window.onbeforeunload', function () {
-    var evName = 'on' + unloadSandbox.beforeUnloadEventName;
+    var evName = 'on' + unloadSandbox.beforeUnloadProperties.nativeEventName;
 
     strictEqual(window[evName], null);
 
@@ -1167,7 +1165,7 @@ test('Url resolving in an instance of document.implementation (GH-1673)', functi
 test('The overridden "createHTMLDocument" method should has right context (GH-1722)', function () {
     return createTestIframe()
         .then(function (iframe) {
-            var iframeDestLocation = iframe.contentWindow['%hammerhead%'].get('./utils/destination-location');
+            var iframeDestLocation = iframe.contentWindow['%hammerhead%'].utils.destLocation;
 
             iframeDestLocation.forceLocation(void 0);
 
@@ -1219,17 +1217,43 @@ if (nativeMethods.linkAsSetter) {
 
         link.href = '/test';
 
-        equal(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test'));
+        strictEqual(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test'));
 
         link.as = 'script';
 
-        equal(link.as, 'script');
-        equal(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test', { resourceType: 's' } ));
+        strictEqual(link.as, 'script');
+        strictEqual(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test', { resourceType: 's' } ));
 
         link.as = 'style';
-        equal(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test'));
+        strictEqual(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test'));
+
+        link.setAttribute('as', 'script');
+
+        strictEqual(link.as, 'script');
+        strictEqual(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test', { resourceType: 's' } ));
     });
 }
+
+test('"modulepreload" link (GH-2518)', function () {
+    var link = document.createElement('link');
+
+    link.href = '/test';
+
+    strictEqual(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test'));
+
+    link.rel = 'modulepreload';
+
+    strictEqual(link.rel, 'modulepreload');
+    strictEqual(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test', { resourceType: 's' } ));
+
+    link.rel = '';
+    strictEqual(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test'));
+
+    link.setAttribute('rel', 'modulepreload');
+
+    strictEqual(link.rel, 'modulepreload');
+    strictEqual(nativeMethods.getAttribute.call(link, 'href'), urlUtils.getProxyUrl('/test', { resourceType: 's' } ));
+});
 
 if (browserUtils.isChrome) {
     asyncTest('setting the "disabled" property of the "input" element should not raise the "Maximum call stack size exceeded" error (GH-24050)', function () {

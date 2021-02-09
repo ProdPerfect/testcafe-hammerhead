@@ -1,17 +1,16 @@
 import INTERNAL_PROPS from '../../processing/dom/internal-properties';
-import EventEmitter from '../utils/event-emitter';
 import BaseDomAdapter from '../../processing/dom/base-dom-adapter';
 import nativeMethods from '../sandbox/native-methods';
-import settings from '../settings';
 import { sameOriginCheck } from '../utils/destination-location';
 import { getProxyUrl } from '../utils/url';
 import * as domUtils from '../utils/dom';
-import fastApply from '../utils/fast-apply';
 import DocumentWriter from '../sandbox/node/document/writer';
 import { findByName } from '../sandbox/windows-storage';
-import DomProcessor from '../../processing/dom';
+import { processHtml } from '../utils/html';
 
 export default class ClientDomAdapter extends BaseDomAdapter {
+    private _srcdocMode = false;
+
     removeAttr (el: HTMLElement, attr: string) {
         return nativeMethods.removeAttribute.call(el, attr);
     }
@@ -76,6 +75,9 @@ export default class ClientDomAdapter extends BaseDomAdapter {
     }
 
     hasIframeParent (el: HTMLElement): boolean {
+        if (this._srcdocMode)
+            return true;
+
         try {
             if (el[INTERNAL_PROPS.processedContext])
                 return window.top !== el[INTERNAL_PROPS.processedContext];
@@ -87,23 +89,8 @@ export default class ClientDomAdapter extends BaseDomAdapter {
         }
     }
 
-    attachEventEmitter (domProcessor: DomProcessor): void {
-        const eventEmitter = new EventEmitter();
-
-        //@ts-ignore
-        domProcessor.on   = (evt: string, listener: Function) => eventEmitter.on(evt, listener);
-        //@ts-ignore
-        domProcessor.off  = (evt: string, listener: Function) => eventEmitter.off(evt, listener);
-        //@ts-ignore
-        domProcessor.emit = (...args: any) => fastApply(eventEmitter, 'emit', args);
-    }
-
-    getCrossDomainPort (): string {
-        return settings.get().crossDomainProxyPort;
-    }
-
-    getProxyUrl (): string {
-        return getProxyUrl.apply(null, arguments);
+    getProxyUrl (...args: [string, any?]): string {
+        return getProxyUrl(...args);
     }
 
     isTopParentIframe (el: HTMLElement): boolean {
@@ -118,5 +105,15 @@ export default class ClientDomAdapter extends BaseDomAdapter {
 
     isExistingTarget (target: string) {
         return !!findByName(target);
+    }
+
+    processSrcdocAttr (html: string): string {
+        this._srcdocMode = true;
+
+        const processedHtml = processHtml(html, { isPage: true });
+
+        this._srcdocMode = false;
+
+        return processedHtml;
     }
 }

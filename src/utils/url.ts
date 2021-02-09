@@ -7,14 +7,16 @@ import trim from './string-trim';
 import { ParsedUrl, ResourceType, RequestDescriptor, ParsedProxyUrl, ProxyUrlOptions } from '../typings/url';
 import { ServerInfo } from '../typings/proxy';
 
-const PROTOCOL_RE        = /^([\w-]+?:)(\/\/|[^\\/]|$)/;
-const LEADING_SLASHES_RE = /^(\/\/)/;
-const HOST_RE            = /^(.*?)(\/|%|\?|;|#|$)/;
-const PORT_RE            = /:([0-9]*)$/;
-const QUERY_AND_HASH_RE  = /(\?.+|#[^#]*)$/;
-const PATH_AFTER_HOST_RE = /^\/([^/]+?)\/([\S\s]+)$/;
-const HTTP_RE            = /^https?:/;
-const FILE_RE            = /^file:/i;
+const PROTOCOL_RE         = /^([\w-]+?:)(\/\/|[^\\/]|$)/;
+const LEADING_SLASHES_RE  = /^(\/\/)/;
+const HOST_RE             = /^(.*?)(\/|%|\?|;|#|$)/;
+const PORT_RE             = /:([0-9]*)$/;
+const QUERY_AND_HASH_RE   = /(\?.+|#[^#]*)$/;
+const PATH_AFTER_HOST_RE  = /^\/([^/]+?)\/([\S\s]+)$/;
+const HTTP_RE             = /^https?:/;
+const FILE_RE             = /^file:/i;
+const SHORT_ORIGIN_RE     = /^http(s)?:\/\//;
+const IS_SECURE_ORIGIN_RE = /^s\*/;
 
 export const SUPPORTED_PROTOCOL_RE                            = /^(?:https?|file):/i;
 export const HASH_RE                                          = /^#/;
@@ -28,6 +30,8 @@ export const SPECIAL_PAGES                                    = [SPECIAL_BLANK_P
 export const HTTP_DEFAULT_PORT  = '80';
 export const HTTPS_DEFAULT_PORT = '443';
 
+export enum Credentials { include, sameOrigin, omit, unknown }
+
 const SPECIAL_PAGE_DEST_RESOURCE_INFO = {
     protocol:      'about:',
     host:          '',
@@ -35,49 +39,54 @@ const SPECIAL_PAGE_DEST_RESOURCE_INFO = {
     port:          '',
     partAfterHost: ''
 };
+const RESOURCE_TYPES = [
+    { name: 'isIframe', flag: 'i' },
+    { name: 'isForm', flag: 'f'},
+    { name: 'isScript', flag: 's'},
+    { name: 'isEventSource', flag: 'e'},
+    { name: 'isHtmlImport', flag: 'h'},
+    { name: 'isWebSocket', flag: 'w'},
+    { name: 'isServiceWorker', flag: 'c'},
+    { name: 'isAjax', flag: 'a'}
+] as { name: keyof ResourceType, flag: string }[];
 
 export function parseResourceType (resourceType: string): ResourceType {
-    if (!resourceType) {
-        return {
-            isIframe:      false,
-            isForm:        false,
-            isScript:      false,
-            isEventSource: false,
-            isHtmlImport:  false,
-            isWebSocket:   false
-        };
+    const parsedResourceType = {};
+
+    if (!resourceType)
+        return parsedResourceType;
+
+    for (const { name, flag } of RESOURCE_TYPES) {
+        if (resourceType.indexOf(flag) > -1)
+            parsedResourceType[name] = true;
     }
 
-    return {
-        isIframe:      /i/.test(resourceType),
-        isForm:        /f/.test(resourceType),
-        isScript:      /s/.test(resourceType),
-        isEventSource: /e/.test(resourceType),
-        isHtmlImport:  /h/.test(resourceType),
-        isWebSocket:   /w/.test(resourceType)
-    };
+    return parsedResourceType;
 }
 
-export function getResourceTypeString (resourceType: ResourceType): string | null {
-    if (!resourceType)
+export function getResourceTypeString (parsedResourceType: ResourceType): string | null {
+    if (!parsedResourceType)
         return null;
 
-    if (!resourceType.isIframe &&
-        !resourceType.isForm &&
-        !resourceType.isScript &&
-        !resourceType.isEventSource &&
-        !resourceType.isHtmlImport &&
-        !resourceType.isWebSocket)
-        return null;
+    let resourceType = '';
 
-    return [
-        resourceType.isIframe ? 'i' : '',
-        resourceType.isForm ? 'f' : '',
-        resourceType.isScript ? 's' : '',
-        resourceType.isEventSource ? 'e' : '',
-        resourceType.isHtmlImport ? 'h' : '',
-        resourceType.isWebSocket ? 'w' : ''
-    ].join('');
+    for (const { name, flag } of RESOURCE_TYPES) {
+        if (parsedResourceType[name])
+            resourceType += flag;
+    }
+
+    return resourceType || null;
+}
+
+function makeShortOrigin (origin: string) {
+    return origin === 'null' ? '' : origin.replace(SHORT_ORIGIN_RE, (_, secure) => secure ? 's*' : '');
+}
+
+export function restoreShortOrigin (origin: string) {
+    if (!origin)
+        return 'null';
+
+    return IS_SECURE_ORIGIN_RE.test(origin) ? origin.replace(IS_SECURE_ORIGIN_RE, 'https://') : 'http://' + origin;
 }
 
 export function isSubDomain (domain: string, subDomain: string): boolean {
@@ -96,25 +105,29 @@ export function sameOriginCheck (location: string, checkedUrl: string): boolean 
     if (!checkedUrl)
         return true;
 
-    const parsedLocation      = parseUrl(location);
-    const parsedCheckedUrl    = parseUrl(checkedUrl);
-    const parsedProxyLocation = parseProxyUrl(location);
-    const parsedDestUrl       = parsedProxyLocation ? parsedProxyLocation.destResourceInfo : parsedLocation;
-    const isRelative          = !parsedCheckedUrl.host;
+    const parsedCheckedUrl = parseUrl(checkedUrl);
+    const isRelative       = !parsedCheckedUrl.host;
 
-    if (isRelative ||
-        parsedCheckedUrl.host === parsedLocation.host && parsedCheckedUrl.protocol === parsedLocation.protocol)
+    if (isRelative)
         return true;
 
-    if (parsedDestUrl) {
-        const portsEq = !parsedDestUrl.port && !parsedCheckedUrl.port ||
-                        parsedDestUrl.port && parsedDestUrl.port.toString() === parsedCheckedUrl.port;
+    const parsedLocation      = parseUrl(location);
+    const parsedProxyLocation = parseProxyUrl(location);
 
-        return parsedDestUrl.protocol === parsedCheckedUrl.protocol && !!portsEq &&
-               parsedDestUrl.hostname === parsedCheckedUrl.hostname;
-    }
+    if (parsedCheckedUrl.host === parsedLocation.host && parsedCheckedUrl.protocol === parsedLocation.protocol)
+        return true;
 
-    return false;
+    const parsedDestUrl = parsedProxyLocation ? parsedProxyLocation.destResourceInfo : parsedLocation;
+
+    if (!parsedDestUrl)
+        return false;
+
+    const isSameProtocol = !parsedCheckedUrl.protocol || parsedCheckedUrl.protocol === parsedDestUrl.protocol;
+
+    const portsEq = !parsedDestUrl.port && !parsedCheckedUrl.port ||
+                    parsedDestUrl.port && parsedDestUrl.port.toString() === parsedCheckedUrl.port;
+
+    return isSameProtocol && !!portsEq && parsedDestUrl.hostname === parsedCheckedUrl.hostname;
 }
 
 // NOTE: Convert the destination protocol and hostname to the lower case. (GH-1)
@@ -127,7 +140,7 @@ function convertHostToLowerCase (url: string): string {
     return formatUrl(parsedUrl);
 }
 
-export function getURLString (url: string): string {
+export function getURLString (url: string | URL): string {
     // TODO: fix it
     // eslint-disable-next-line no-undef
     if (url === null && /iPad|iPhone/i.test(window.navigator.userAgent))
@@ -150,8 +163,11 @@ export function getProxyUrl (url: string, opts: ProxyUrlOptions): string {
     if (opts.charset)
         params.push(opts.charset.toLowerCase());
 
+    if (typeof opts.credentials === 'number')
+        params.push(opts.credentials.toString());
+
     if (opts.reqOrigin)
-        params.push(opts.reqOrigin);
+        params.push(encodeURIComponent(makeShortOrigin(opts.reqOrigin)));
 
     const descriptor    = params.join(REQUEST_DESCRIPTOR_VALUES_SEPARATOR);
     const proxyProtocol = opts.proxyProtocol || 'http:';
@@ -159,37 +175,43 @@ export function getProxyUrl (url: string, opts: ProxyUrlOptions): string {
     return `${proxyProtocol}//${opts.proxyHostname}:${opts.proxyPort}/${descriptor}/${convertHostToLowerCase(url)}`;
 }
 
-export function getDomain (parsed: ParsedUrl): string {
+export function getDomain (parsed: { protocol?: string, host?: string, hostname?: string, port?: string | number }): string {
+    if (parsed.protocol === 'file:')
+        return 'null';
+
     return formatUrl({
         protocol: parsed.protocol,
         host:     parsed.host,
         hostname: parsed.hostname,
-        port:     parsed.port
+        port:     String(parsed.port || '')
     });
 }
 
 function parseRequestDescriptor (desc: string): RequestDescriptor | null {
-    const params = desc.split(REQUEST_DESCRIPTOR_VALUES_SEPARATOR);
+    const [sessionInfo, resourceType, ...resourceData] = desc.split(REQUEST_DESCRIPTOR_VALUES_SEPARATOR);
 
-    if (!params.length)
+    if (!sessionInfo)
         return null;
 
-    const sessionInfo                   = params[0].split(REQUEST_DESCRIPTOR_SESSION_INFO_VALUES_SEPARATOR);
-    const sessionId                     = sessionInfo[0];
-    const resourceType                  = params[1] || null;
-    const resourceData                  = params[2] || null;
-    const parsedDesc: RequestDescriptor = { sessionId, resourceType };
+    const [sessionId, windowId] = sessionInfo.split(REQUEST_DESCRIPTOR_SESSION_INFO_VALUES_SEPARATOR);
+    const parsedDesc            = { sessionId, resourceType: resourceType || null } as RequestDescriptor;
 
-    if (sessionInfo[1])
-        parsedDesc.windowId = sessionInfo[1];
+    if (windowId)
+        parsedDesc.windowId = windowId;
 
-    if (resourceType && resourceData) {
+    if (resourceType && resourceData.length) {
         const parsedResourceType = parseResourceType(resourceType);
 
-        if (parsedResourceType.isScript)
-            parsedDesc.charset = resourceData;
+        if (parsedResourceType.isScript || parsedResourceType.isServiceWorker)
+            parsedDesc.charset = resourceData[0];
         else if (parsedResourceType.isWebSocket)
-            parsedDesc.reqOrigin = decodeURIComponent(resourceData);
+            parsedDesc.reqOrigin = decodeURIComponent(restoreShortOrigin(resourceData[0]));
+        else if (parsedResourceType.isAjax) {
+            parsedDesc.credentials = parseInt(resourceData[0]);
+
+            if (resourceData.length === 2)
+                parsedDesc.reqOrigin = decodeURIComponent(restoreShortOrigin(resourceData[1]));
+        }
     }
 
     return parsedDesc;
@@ -245,7 +267,8 @@ export function parseProxyUrl (proxyUrl: string): ParsedProxyUrl | null {
         resourceType: parsedDesc.resourceType,
         charset:      parsedDesc.charset,
         reqOrigin:    parsedDesc.reqOrigin,
-        windowId:     parsedDesc.windowId
+        windowId:     parsedDesc.windowId,
+        credentials:  parsedDesc.credentials
     };
 }
 
@@ -253,7 +276,7 @@ export function getPathname (path: string): string {
     return path.replace(QUERY_AND_HASH_RE, '');
 }
 
-export function parseUrl (url: string): ParsedUrl {
+export function parseUrl (url: string | URL): ParsedUrl {
     const parsed: any = {};
 
     url = processSpecialChars(url);
@@ -364,7 +387,7 @@ export function formatUrl (parsedUrl: ParsedUrl): string {
     return url;
 }
 
-export function correctMultipleSlashes (url: string, pageProtocol: string = ''): string {
+export function correctMultipleSlashes (url: string, pageProtocol = ''): string {
     // NOTE: Remove unnecessary slashes from the beginning of the url and after scheme.
     // For example:
     // "//////example.com" -> "//example.com" (scheme-less HTTP(S) URL)
@@ -382,7 +405,7 @@ export function correctMultipleSlashes (url: string, pageProtocol: string = ''):
     return url.replace(/^(https?:)?\/+(\/\/.*$)/i, '$1$2');
 }
 
-export function processSpecialChars (url: string): string {
+export function processSpecialChars (url: string | URL): string {
     return correctMultipleSlashes(getURLString(url));
 }
 

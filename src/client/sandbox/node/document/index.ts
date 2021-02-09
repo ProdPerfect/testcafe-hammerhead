@@ -10,9 +10,9 @@ import DocumentWriter from './writer';
 import ShadowUI from './../../shadow-ui';
 import INTERNAL_PROPS from '../../../../processing/dom/internal-properties';
 import LocationAccessorsInstrumentation from '../../code-instrumentation/location';
-import { overrideDescriptor, createOverriddenDescriptor } from '../../../utils/property-overriding';
+import { overrideDescriptor, createOverriddenDescriptor, overrideFunction } from '../../../utils/overriding';
 import NodeSandbox from '../index';
-import { getDestinationUrl } from '../../../utils/url';
+import { getDestinationUrl, isSpecialPage } from '../../../utils/url';
 import DocumentTitleStorageInitializer from './title-storage-initializer';
 
 export default class DocumentSandbox extends SandboxBase {
@@ -28,12 +28,12 @@ export default class DocumentSandbox extends SandboxBase {
         this.documentWriter = null;
     }
 
-    static forceProxySrcForImageIfNecessary (element) {
+    static forceProxySrcForImageIfNecessary (element: Element): void {
         if (isImgElement(element) && settings.get().forceProxySrcForImage)
             element[INTERNAL_PROPS.forceProxySrcForImage] = true;
     }
 
-    private static _isDocumentInDesignMode (doc) {
+    private static _isDocumentInDesignMode (doc: HTMLDocument): boolean {
         return doc.designMode === 'on';
     }
 
@@ -115,12 +115,7 @@ export default class DocumentSandbox extends SandboxBase {
         return result;
     }
 
-    private static _ensureDocumentMethodOverride (document, overridenMethods, methodName) {
-        if (document[methodName] !== overridenMethods[methodName])
-            document[methodName] = overridenMethods[methodName];
-    }
-
-    attach (window, document) {
+    attach (window, document, partialInitializationForNotLoadedIframe = false) {
         if (this._needToUpdateDocumentWriter(window, document)) {
             this.documentWriter = new DocumentWriter(window, document);
 
@@ -134,8 +129,8 @@ export default class DocumentSandbox extends SandboxBase {
         const documentSandbox = this;
         const docPrototype    = window.Document.prototype;
 
-        const overridenMethods = {
-            open: function (...args) {
+        const overriddenMethods = {
+            open: function (this: Document, ...args: [string?, string?, string?, boolean?]) {
                 const isUninitializedIframe = documentSandbox._isUninitializedIframeWithoutSrc(window);
 
                 if (!isUninitializedIframe)
@@ -164,7 +159,7 @@ export default class DocumentSandbox extends SandboxBase {
                 return result;
             },
 
-            close: function (...args) {
+            close: function (this: Document, ...args: []) {
                 // NOTE: IE11 raise the "load" event only when the document.close method is called. We need to
                 // restore the overridden document.open and document.write methods before Hammerhead injection, if the
                 // window is not initialized.
@@ -198,20 +193,20 @@ export default class DocumentSandbox extends SandboxBase {
             }
         };
 
-        window[nativeMethods.documentOpenPropOwnerName].prototype.open       = overridenMethods.open;
-        window[nativeMethods.documentClosePropOwnerName].prototype.close     = overridenMethods.close;
-        window[nativeMethods.documentWritePropOwnerName].prototype.write     = overridenMethods.write;
-        window[nativeMethods.documentWriteLnPropOwnerName].prototype.writeln = overridenMethods.writeln;
+        overrideFunction(window[nativeMethods.documentOpenPropOwnerName].prototype, 'open', overriddenMethods.open);
+        overrideFunction(window[nativeMethods.documentClosePropOwnerName].prototype, 'close', overriddenMethods.close);
+        overrideFunction(window[nativeMethods.documentWritePropOwnerName].prototype, 'write', overriddenMethods.write);
+        overrideFunction(window[nativeMethods.documentWriteLnPropOwnerName].prototype, 'writeln', overriddenMethods.writeln);
 
-        DocumentSandbox._ensureDocumentMethodOverride(document, overridenMethods, 'open');
-        DocumentSandbox._ensureDocumentMethodOverride(document, overridenMethods, 'close');
-        DocumentSandbox._ensureDocumentMethodOverride(document, overridenMethods, 'write');
-        DocumentSandbox._ensureDocumentMethodOverride(document, overridenMethods, 'writeln');
+        overrideFunction(document, 'open', overriddenMethods.open);
+        overrideFunction(document, 'close', overriddenMethods.close);
+        overrideFunction(document, 'write', overriddenMethods.write);
+        overrideFunction(document, 'writeln', overriddenMethods.writeln);
 
-        if (document.open !== overridenMethods.open)
-            document.open = overridenMethods.open;
+        if (document.open !== overriddenMethods.open)
+            overrideFunction(document, 'open', overriddenMethods.open);
 
-        docPrototype.createElement = function (...args) {
+        overrideFunction(docPrototype, 'createElement', function (this: Document, ...args: [string, ElementCreationOptions?]) {
             const el = nativeMethods.createElement.apply(this, args);
 
             DocumentSandbox.forceProxySrcForImageIfNecessary(el);
@@ -219,9 +214,9 @@ export default class DocumentSandbox extends SandboxBase {
             documentSandbox._nodeSandbox.processNodes(el);
 
             return el;
-        };
+        });
 
-        docPrototype.createElementNS = function (...args) {
+        overrideFunction(docPrototype, 'createElementNS', function (this: Document, ...args: [string, string, (string | ElementCreationOptions)?]) {
             const el = nativeMethods.createElementNS.apply(this, args);
 
             DocumentSandbox.forceProxySrcForImageIfNecessary(el);
@@ -229,15 +224,15 @@ export default class DocumentSandbox extends SandboxBase {
             documentSandbox._nodeSandbox.processNodes(el);
 
             return el;
-        };
+        });
 
-        docPrototype.createDocumentFragment = function (...args) {
+        overrideFunction(docPrototype, 'createDocumentFragment', function (this: Document, ...args: []) {
             const fragment = nativeMethods.createDocumentFragment.apply(this, args);
 
             documentSandbox._nodeSandbox.processNodes(fragment);
 
             return fragment;
-        };
+        });
 
         const htmlDocPrototype = window.HTMLDocument.prototype;
         let storedDomain       = '';
@@ -252,7 +247,9 @@ export default class DocumentSandbox extends SandboxBase {
 
         const referrerOverriddenDescriptor = createOverriddenDescriptor(docPrototype, 'referrer', {
             getter: function () {
-                return getDestinationUrl(nativeMethods.documentReferrerGetter.call(this));
+                const referrer = getDestinationUrl(nativeMethods.documentReferrerGetter.call(this));
+
+                return isSpecialPage(referrer) ? '' : referrer;
             }
         });
 
@@ -299,7 +296,7 @@ export default class DocumentSandbox extends SandboxBase {
         });
 
         overrideDescriptor(docPrototype, 'activeElement', {
-            getter: function () {
+            getter: function (this: Document) {
                 const activeElement = nativeMethods.documentActiveElementGetter.call(this);
 
                 if (activeElement && isShadowUIElement(activeElement))
@@ -320,7 +317,7 @@ export default class DocumentSandbox extends SandboxBase {
             }
         });
 
-        if (this._documentTitleStorageInitializer) {
+        if (this._documentTitleStorageInitializer && !partialInitializationForNotLoadedIframe) {
             overrideDescriptor(docPrototype, 'title', {
                 getter: function () {
                     return documentSandbox._documentTitleStorageInitializer.storage.getTitle();

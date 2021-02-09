@@ -30,7 +30,7 @@ const HEADER_SIZE_CALCULATION_PRECISION = 2;
 // Calculates the HTTP header size in bytes that a customer should specify via the
 // --max-http-header-size Node option so that the proxy can process the site
 // https://nodejs.org/api/cli.html#cli_max_http_header_size_size
-// Example: 
+// Example:
 // (8211 * 2).toPrecision(2) -> 16 * 10^3 -> 16000
 function getRecommendedMaxHeaderSize (currentHeaderSize: number): number {
     return Number((currentHeaderSize * HEADER_SIZE_MULTIPLIER).toPrecision(HEADER_SIZE_CALCULATION_PRECISION));
@@ -38,7 +38,7 @@ function getRecommendedMaxHeaderSize (currentHeaderSize: number): number {
 
 export function sendRequest (ctx: RequestPipelineContext) {
     return new Promise(resolve => {
-        const req = ctx.isFileProtocol ? new FileRequest(ctx.reqOpts.url) : new DestinationRequest(ctx.reqOpts);
+        const req = ctx.isFileProtocol ? new FileRequest(ctx.reqOpts.url) : new DestinationRequest(ctx.reqOpts, ctx.serverInfo.cacheRequests);
 
         ctx.goToNextStage = false;
 
@@ -51,9 +51,11 @@ export function sendRequest (ctx: RequestPipelineContext) {
 
             ctx.destRes       = res;
             ctx.goToNextStage = true;
-            res.once('end', () => {
-                ctx.isDestResReadableEnded = true;
-            });
+
+            ctx.buildContentInfo();
+            ctx.calculateIsDestResReadableEnded();
+            ctx.createCacheEntry(res);
+
             resolve();
         });
 
@@ -68,7 +70,7 @@ export function sendRequest (ctx: RequestPipelineContext) {
                     url:                      ctx.dest.url,
                     message:                  MESSAGE.nodeError[err.code] || err.toString(),
                     headerSize:               headerSize,
-                    recommendedMaxHeaderSize: getRecommendedMaxHeaderSize(headerSize),
+                    recommendedMaxHeaderSize: getRecommendedMaxHeaderSize(headerSize).toString(),
                     invalidChars:             getFormattedInvalidCharacters(rawHeadersStr)
                 }));
             }
@@ -78,7 +80,7 @@ export function sendRequest (ctx: RequestPipelineContext) {
 
         req.on('fatalError', err => {
             if (ctx.isFileProtocol)
-                logger.destination('File read error %s %o', ctx.requestId, err);
+                logger.destination.onFileReadError(ctx, err);
 
             error(ctx, err);
             resolve();
@@ -90,7 +92,7 @@ export function sendRequest (ctx: RequestPipelineContext) {
         });
 
         if (req instanceof FileRequest) {
-            logger.destination('Read file %s %s', ctx.requestId, ctx.reqOpts.url);
+            logger.destination.onFileRead(ctx);
             req.init();
         }
     });

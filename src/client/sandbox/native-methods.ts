@@ -1,5 +1,6 @@
 /*global Document, Window */
-import getGlobalContextInfo from '../utils/global-context-info';
+import globalContextInfo from '../utils/global-context-info';
+import { isNativeFunction } from '../utils/overriding';
 
 const NATIVE_CODE_RE = /\[native code]/;
 
@@ -8,6 +9,7 @@ class NativeMethods {
     createDocumentFragment: Document['createDocumentFragment'];
     createElement: Document['createElement'];
     createElementNS: Document['createElementNS'];
+    createTextNode: Document['createTextNode'];
     documentOpenPropOwnerName: string;
     documentClosePropOwnerName: string;
     documentWritePropOwnerName: string;
@@ -43,7 +45,9 @@ class NativeMethods {
     documentDocumentURIGetter: any;
     documentTitleGetter: any;
     documentTitleSetter: any;
-    appendChild: any;
+    appendChild: Node['appendChild'];
+    attachShadow: Element['attachShadow'];
+    append: Element['append'];
     replaceChild: any;
     cloneNode: any;
     elementGetElementsByClassName: any;
@@ -53,13 +57,14 @@ class NativeMethods {
     getAttribute: any;
     getAttributeNS: any;
     insertAdjacentHTML: any;
-    insertBefore: any;
+    insertBefore: Node['insertBefore'];
     insertCell: any;
     insertTableRow: any;
     insertTBodyRow: any;
     removeAttribute: any;
     removeAttributeNS: any;
-    removeChild: any;
+    removeChild: Node['removeChild'];
+    remove: Element['remove'];
     setAttribute: any;
     setAttributeNS: any;
     hasAttribute: any;
@@ -68,6 +73,7 @@ class NativeMethods {
     anchorToString: any;
     matches: any;
     closest: any;
+    appendData: any;
     addEventListener: any;
     removeEventListener: any;
     blur: any;
@@ -100,14 +106,14 @@ class NativeMethods {
     clearInterval: Window['clearInterval'];
     registerProtocolHandler: any;
     sendBeacon: any;
-    xhrAbort: any;
-    xhrOpen: any;
-    xhrSend: any;
+    xhrAbort: XMLHttpRequest['abort'];
+    xhrOpen: XMLHttpRequest['open'];
+    xhrSend: XMLHttpRequest['send'];
     xhrAddEventListener: any;
     xhrRemoveEventListener: any;
-    xhrGetResponseHeader: any;
-    xhrGetAllResponseHeaders: any;
-    xhrSetRequestHeader: any;
+    xhrGetResponseHeader: XMLHttpRequest['getResponseHeader'];
+    xhrGetAllResponseHeaders: XMLHttpRequest['getAllResponseHeaders'];
+    xhrSetRequestHeader: XMLHttpRequest['setRequestHeader'];
     xhrOverrideMimeType: any;
     xhrDispatchEvent: any;
     registerServiceWorker: any;
@@ -117,13 +123,14 @@ class NativeMethods {
     fetch: Window['fetch'];
     Request: typeof Request;
     requestUrlGetter: (this: Request) => Request['url'];
-    Headers: Headers['constructor'];
+    requestReferrerGetter: (this: Request) => Request['referrer'];
+    Headers: typeof Headers;
     headersSet: Headers['set'];
     headersGet: Headers['get'];
-    headersHas: Headers['has'];
     headersDelete: Headers['delete'];
     headersEntries: Headers['entries'];
     headersForEach: Headers['forEach'];
+    headersValues: Headers['values'];
     windowAddEventListener: any;
     windowRemoveEventListener: any;
     WindowPointerEvent: any;
@@ -133,10 +140,10 @@ class NativeMethods {
     WindowKeyboardEvent: any;
     WindowFocusEvent: any;
     WindowTextEvent: any;
-    WindowInputEvent: any;
+    WindowInputEvent: typeof InputEvent;
     WindowMouseEvent: any;
-    windowOriginGetter: () => string;
-    windowOriginSetter: () => any;
+    windowOriginGetter: (this: Window) => string;
+    windowOriginSetter: (this: Window, value: string) => void;
     canvasContextDrawImage: any;
     formDataAppend: FormData['append'];
     date: DateConstructor;
@@ -182,6 +189,7 @@ class NativeMethods {
     inputSrcSetter: any;
     frameSrcSetter: any;
     iframeSrcSetter: any;
+    iframeSrcdocSetter: (this: HTMLIFrameElement, val: HTMLIFrameElement['srcdoc']) => void;
     anchorHrefSetter: any;
     linkHrefSetter: any;
     linkRelSetter: any;
@@ -217,6 +225,7 @@ class NativeMethods {
     linkIntegritySetter: any;
     isEventPropsLocatedInProto: boolean;
     winOnBeforeUnloadSetter: any;
+    winOnUnloadSetter: any;
     winOnPageHideSetter: any;
     winOnMessageSetter: any;
     winOnErrorSetter: any;
@@ -228,12 +237,11 @@ class NativeMethods {
     messageEventOriginGetter: any;
     htmlCollectionLengthGetter: any;
     nodeListLengthGetter: any;
-    nodeParentNodeGetter: any;
+    nodeParentNodeGetter: () => Node['parentNode'];
     nodeChildNodesGetter: any;
     elementChildElementCountGetter: any;
     inputFilesGetter: any;
     styleSheetHrefGetter: any;
-    xhrStatusGetter: any;
     objectDataGetter: any;
     inputTypeGetter: any;
     inputValueGetter: any;
@@ -248,6 +256,7 @@ class NativeMethods {
     inputSrcGetter: any;
     frameSrcGetter: any;
     iframeSrcGetter: any;
+    iframeSrcdocGetter: (this: HTMLIFrameElement) => HTMLIFrameElement['srcdoc'];
     anchorHrefGetter: any;
     linkHrefGetter: any;
     linkRelGetter: any;
@@ -298,7 +307,7 @@ class NativeMethods {
     elementAttributesPropOwnerName: string;
     elementAttributesGetter: any;
     performanceEntryNameGetter: any;
-    messageEventDataGetter: any;
+    messageEventDataGetter: (this: MessageEvent) => MessageEvent['data'];
     htmlManifestGetter: any;
     htmlManifestSetter: any;
     titleElementTextGetter: Function;
@@ -325,6 +334,7 @@ class NativeMethods {
     tokenListSupports: any;
     tokenListToggle: any;
     tokenListContains: any;
+    tokenListValueSetter: (value: string) => void;
     windowClass: any;
     documentClass: any;
     locationClass: any;
@@ -343,7 +353,7 @@ class NativeMethods {
     Image: any;
     Function: any;
     Error: any;
-    functionToString: any;
+    functionToString: Function;
     FontFace: any;
     StorageEvent: any;
     MutationObserver: any;
@@ -368,13 +378,11 @@ class NativeMethods {
     URL: typeof URL;
 
     constructor (doc?: Document, win?: Window & typeof globalThis) {
-        const globalCtx = getGlobalContextInfo();
+        win = win || globalContextInfo.global;
 
-        win = win || globalCtx.global;
+        this.refreshWindowMeths(win, globalContextInfo.isInWorker);
 
-        this.refreshWindowMeths(win, globalCtx.isInWorker);
-
-        if (globalCtx.isInWorker)
+        if (globalContextInfo.isInWorker)
             return;
 
         this.refreshDocumentMeths(doc, win);
@@ -393,13 +401,13 @@ class NativeMethods {
         doc = doc || document;
         win = win || window as Window & typeof globalThis;
 
-        // @ts-ignore
         const docPrototype = win.Document.prototype;
 
         // Dom
         this.createDocumentFragment = docPrototype.createDocumentFragment;
         this.createElement          = docPrototype.createElement;
         this.createElementNS        = docPrototype.createElementNS;
+        this.createTextNode         = docPrototype.createTextNode;
 
         this.documentOpenPropOwnerName    = NativeMethods._getDocumentPropOwnerName(docPrototype, 'open');
         this.documentClosePropOwnerName   = NativeMethods._getDocumentPropOwnerName(docPrototype, 'close');
@@ -438,7 +446,9 @@ class NativeMethods {
         }
 
         this.documentCreateEvent     = docPrototype.createEvent;
+        // @ts-ignore Deprecated
         this.documentCreateTouch     = docPrototype.createTouch;
+        // @ts-ignore Deprecated
         this.documentCreateTouchList = docPrototype.createTouchList;
 
         // getters/setters
@@ -480,11 +490,16 @@ class NativeMethods {
     refreshElementMeths (doc, win: Window & typeof globalThis) {
         win = win || window as Window & typeof globalThis;
 
-        const createElement = tagName => this.createElement.call(doc || document, tagName);
+        const createElement = (tagName => this.createElement.call(doc || document, tagName)) as Document['createElement'];
         const nativeElement = createElement('div');
 
+        const createTextNode = data => this.createTextNode.call(doc || document, data);
+        const textNode       = createTextNode('text');
+
         // Dom
-        this.appendChild                   = nativeElement.appendChild;
+        this.appendChild                   = win.Node.prototype.appendChild;
+        this.append                        = win.Element.prototype.append;
+        this.attachShadow                  = win.Element.prototype.attachShadow;
         this.replaceChild                  = nativeElement.replaceChild;
         this.cloneNode                     = nativeElement.cloneNode;
         this.elementGetElementsByClassName = nativeElement.getElementsByClassName;
@@ -500,7 +515,8 @@ class NativeMethods {
         this.insertTBodyRow                = createElement('tbody').insertRow;
         this.removeAttribute               = nativeElement.removeAttribute;
         this.removeAttributeNS             = nativeElement.removeAttributeNS;
-        this.removeChild                   = nativeElement.removeChild;
+        this.removeChild                   = win.Node.prototype.removeChild;
+        this.remove                        = win.Element.prototype.remove;
         this.setAttribute                  = nativeElement.setAttribute;
         this.setAttributeNS                = nativeElement.setAttributeNS;
         this.hasAttribute                  = nativeElement.hasAttribute;
@@ -509,6 +525,9 @@ class NativeMethods {
         this.anchorToString                = win.HTMLAnchorElement.prototype.toString;
         this.matches                       = nativeElement.matches || nativeElement.msMatchesSelector;
         this.closest                       = nativeElement.closest;
+
+        // Text node
+        this.appendData = textNode.appendData;
 
         // TODO: remove this condition after the GH-1649 fix
         if (!this.isNativeCode(this.elementGetElementsByTagName)) {
@@ -574,12 +593,14 @@ class NativeMethods {
         const eventPropsOwner = this.isEventPropsLocatedInProto ? winProto : win;
 
         const winOnBeforeUnloadDescriptor = win.Object.getOwnPropertyDescriptor(eventPropsOwner, 'onbeforeunload');
+        const winOnUnloadDescriptor       = win.Object.getOwnPropertyDescriptor(eventPropsOwner, 'onunload');
         const winOnPageHideDescriptor     = win.Object.getOwnPropertyDescriptor(eventPropsOwner, 'onpagehide');
         const winOnMessageDescriptor      = win.Object.getOwnPropertyDescriptor(eventPropsOwner, 'onmessage');
         const winOnErrorDescriptor        = win.Object.getOwnPropertyDescriptor(eventPropsOwner, 'onerror');
         const winOnHashChangeDescriptor   = win.Object.getOwnPropertyDescriptor(eventPropsOwner, 'onhashchange');
 
         this.winOnBeforeUnloadSetter = winOnBeforeUnloadDescriptor && winOnBeforeUnloadDescriptor.set;
+        this.winOnUnloadSetter       = winOnUnloadDescriptor && winOnUnloadDescriptor.set;
         this.winOnPageHideSetter     = winOnPageHideDescriptor && winOnPageHideDescriptor.set;
         this.winOnMessageSetter      = winOnMessageDescriptor && winOnMessageDescriptor.set;
         this.winOnErrorSetter        = winOnErrorDescriptor && winOnErrorDescriptor.set;
@@ -613,10 +634,11 @@ class NativeMethods {
             this.messageEventDataGetter = dataPropDescriptor.get;
 
         if (win.fetch) {
-            this.responseStatusGetter = win.Object.getOwnPropertyDescriptor(win.Response.prototype, 'status').get;
-            this.responseTypeGetter   = win.Object.getOwnPropertyDescriptor(win.Response.prototype, 'type').get;
-            this.responseUrlGetter    = win.Object.getOwnPropertyDescriptor(win.Response.prototype, 'url').get;
-            this.requestUrlGetter     = win.Object.getOwnPropertyDescriptor(win.Request.prototype, 'url').get;
+            this.responseStatusGetter  = win.Object.getOwnPropertyDescriptor(win.Response.prototype, 'status').get;
+            this.responseTypeGetter    = win.Object.getOwnPropertyDescriptor(win.Response.prototype, 'type').get;
+            this.responseUrlGetter     = win.Object.getOwnPropertyDescriptor(win.Response.prototype, 'url').get;
+            this.requestUrlGetter      = win.Object.getOwnPropertyDescriptor(win.Request.prototype, 'url').get;
+            this.requestReferrerGetter = win.Object.getOwnPropertyDescriptor(win.Request.prototype, 'referrer').get;
         }
 
         if (win.XMLHttpRequest) {
@@ -625,8 +647,6 @@ class NativeMethods {
             // NOTE: IE doesn't support the 'responseURL' property
             if (xhrResponseURLDescriptor)
                 this.xhrResponseURLGetter = xhrResponseURLDescriptor.get;
-
-            this.xhrStatusGetter = win.Object.getOwnPropertyDescriptor(win.XMLHttpRequest.prototype, 'status').get;
         }
 
         // eslint-disable-next-line no-restricted-properties
@@ -849,6 +869,14 @@ class NativeMethods {
         if (anchorOriginDescriptor)
             this.anchorOriginGetter = anchorOriginDescriptor.get;
 
+        const iframeSrcdocDescriptor = win.Object.getOwnPropertyDescriptor(win.HTMLIFrameElement.prototype, 'srcdoc');
+
+        // NOTE: IE11 doesn't support the 'srcdoc' property
+        if (iframeSrcdocDescriptor) {
+            this.iframeSrcdocGetter = iframeSrcdocDescriptor.get;
+            this.iframeSrcdocSetter = iframeSrcdocDescriptor.set;
+        }
+
         const cssStyleSheetHrefDescriptor = win.Object.getOwnPropertyDescriptor(win.CSSStyleSheet.prototype, 'href');
 
         // NOTE: IE11 doesn't support the 'href' property
@@ -949,19 +977,16 @@ class NativeMethods {
             this.Headers        = win.Headers;
             this.headersSet     = win.Headers.prototype.set;
             this.headersGet     = win.Headers.prototype.get;
-            this.headersHas     = win.Headers.prototype.has;
             this.headersDelete  = win.Headers.prototype.delete;
             this.headersEntries = win.Headers.prototype.entries;
             this.headersForEach = win.Headers.prototype.forEach;
+            this.headersValues  = win.Headers.prototype.values;
         }
 
         // Event
-        // NOTE: IE11 has no EventTarget so we should save "Event" methods separately
-        if (!win.EventLisener) {
-            this.windowAddEventListener    = win.addEventListener || winProto.addEventListener;
-            this.windowRemoveEventListener = win.removeEventListener || winProto.removeEventListener;
-            this.windowDispatchEvent       = win.dispatchEvent;
-        }
+        this.windowAddEventListener    = win.addEventListener || winProto.addEventListener;
+        this.windowRemoveEventListener = win.removeEventListener || winProto.removeEventListener;
+        this.windowDispatchEvent       = win.dispatchEvent;
 
         this.WindowPointerEvent   = win.PointerEvent || winProto.PointerEvent;
         this.WindowMSPointerEvent = win.MSPointerEvent || winProto.MSPointerEvent;
@@ -1025,6 +1050,13 @@ class NativeMethods {
             this.tokenListToggle   = win.DOMTokenList.prototype.toggle;
             this.tokenListContains = win.DOMTokenList.prototype.contains;
 
+            const tokenListValueDescriptor = win.Object.getOwnPropertyDescriptor(win.DOMTokenList.prototype, 'value');
+
+            // NOTE: IE11 doesn't support the 'value' property of the DOMTokenList interface
+            if (tokenListValueDescriptor)
+                this.tokenListValueSetter = tokenListValueDescriptor.set;
+
+
             // Stylesheets
             this.styleGetPropertyValue = win.CSSStyleDeclaration.prototype.getPropertyValue;
             this.styleSetProperty      = win.CSSStyleDeclaration.prototype.setProperty;
@@ -1075,7 +1107,7 @@ class NativeMethods {
         this.XMLHttpRequest       = win.XMLHttpRequest;
         this.Image                = win.Image;
         this.Function             = win.Function;
-        this.functionToString     = win.Function.toString;
+        this.functionToString     = win.Function.prototype.toString;
         this.Error                = win.Error;
         this.FontFace             = win.FontFace;
         this.StorageEvent         = win.StorageEvent;
@@ -1087,7 +1119,6 @@ class NativeMethods {
         this.NodeList             = win.NodeList;
         this.Node                 = win.Node;
         this.URL                  = win.URL;
-        this.Proxy                = win.Proxy;
         this.DataTransfer         = win.DataTransfer;
         this.DataTransferItemList = win.DataTransferItemList;
         this.DataTransferItem     = win.DataTransferItem;
@@ -1099,7 +1130,7 @@ class NativeMethods {
     }
 
     refreshElectronMeths (vmModule): boolean {
-        if (this.createScript && this.createScript.toString() !== vmModule.createScript.toString())
+        if (this.createScript && isNativeFunction(vmModule.createScript))
             return false;
 
         this.createScript      = vmModule.createScript;
@@ -1162,20 +1193,19 @@ class NativeMethods {
 
         const needToRefreshDocumentMethods = tryToExecuteCode(
             () => !doc.createElement ||
-                  this.createElement.toString() === document.createElement.toString()
+                  isNativeFunction(document.createElement)
         );
 
         const needToRefreshElementMethods = tryToExecuteCode(() => {
             const nativeElement = this.createElement.call(doc, 'div');
 
-            return nativeElement.getAttribute.toString() === this.getAttribute.toString();
+            return isNativeFunction(nativeElement.getAttribute);
         });
 
         const needToRefreshWindowMethods = tryToExecuteCode(() => {
             this.setTimeout.call(win, () => void 0, 0);
 
-            //@ts-ignore
-            return win.XMLHttpRequest.prototype.open.toString() === this.xhrOpen.toString();
+            return isNativeFunction(win.XMLHttpRequest.prototype.open);
         });
 
         // NOTE: T173709

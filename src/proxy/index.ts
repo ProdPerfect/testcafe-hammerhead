@@ -2,7 +2,13 @@ import net from 'net';
 import Session from '../session';
 import { ExternalProxySettingsRaw } from '../typings/session';
 import Router from './router';
-import { StaticContent, ServiceMessage, ServerInfo } from '../typings/proxy';
+import {
+    StaticContent,
+    ServiceMessage,
+    ServerInfo,
+    ProxyOptions
+} from '../typings/proxy';
+
 import http from 'http';
 import https from 'https';
 import * as urlUtils from '../utils/url';
@@ -14,6 +20,7 @@ import { resetKeepAliveConnections } from '../request-pipeline/destination-reque
 import SERVICE_ROUTES from './service-routes';
 import BUILTIN_HEADERS from '../request-pipeline/builtin-header-names';
 import logger from '../utils/logger';
+import errToString from '../utils/err-to-string';
 
 const SESSION_IS_NOT_OPENED_ERR = 'Session is not opened in proxy';
 
@@ -26,13 +33,14 @@ function parseAsJson (msg: Buffer): ServiceMessage | null {
     }
 }
 
-function createServerInfo (hostname: string, port: number, crossDomainPort: number, protocol: string): ServerInfo {
+function createServerInfo (hostname: string, port: number, crossDomainPort: number, protocol: string, cacheRequests: boolean): ServerInfo {
     return {
-        hostname:        hostname,
-        port:            port,
-        crossDomainPort: crossDomainPort,
-        protocol:        protocol,
-        domain:          `${protocol}//${hostname}:${port}`
+        hostname,
+        port,
+        crossDomainPort,
+        protocol,
+        cacheRequests,
+        domain: `${protocol}//${hostname}:${port}`
     };
 }
 
@@ -51,16 +59,17 @@ export default class Proxy extends Router {
     // https://github.com/nodejs/node/commit/186035243fad247e3955fa0c202987cae99e82db#diff-1d0d420098503156cddb601e523b82e7R59
     public static MAX_REQUEST_HEADER_SIZE = 80 * 1024;
 
-    constructor (hostname: string, port1: number, port2: number, options: any = {}) {
+    constructor (hostname: string, port1: number, port2: number, options: Partial<ProxyOptions> = { developmentMode: false, cache: false }) {
         super(options);
 
-        const { ssl, developmentMode } = options;
-        const protocol                 = ssl ? 'https:' : 'http:';
-        const opts                     = this._getOpts(ssl);
-        const createServer             = this._getCreateServerMethod(ssl);
+        const { ssl, developmentMode, cache } = options;
 
-        this.server1Info = createServerInfo(hostname, port1, port2, protocol);
-        this.server2Info = createServerInfo(hostname, port2, port1, protocol);
+        const protocol     = ssl ? 'https:' : 'http:';
+        const opts         = this._getOpts(ssl);
+        const createServer = this._getCreateServerMethod(ssl);
+
+        this.server1Info = createServerInfo(hostname, port1, port2, protocol, cache);
+        this.server2Info = createServerInfo(hostname, port2, port1, protocol, cache);
 
         this.server1 = createServer(opts, (req: http.IncomingMessage, res: http.ServerResponse) => this._onRequest(req, res, this.server1Info));
         this.server2 = createServer(opts, (req: http.IncomingMessage, res: http.ServerResponse) => this._onRequest(req, res, this.server2Info));
@@ -93,11 +102,11 @@ export default class Proxy extends Router {
         return ssl ? https.createServer : http.createServer;
     }
 
-    _closeSockets () {
+    _closeSockets (): void {
         this.sockets.forEach(socket => socket.destroy());
     }
 
-    _startSocketsCollecting () {
+    _startSocketsCollecting (): void {
         const handler = (socket: net.Socket) => {
             this.sockets.add(socket);
 
@@ -108,7 +117,7 @@ export default class Proxy extends Router {
         this.server2.on('connection', handler);
     }
 
-    _registerServiceRoutes (developmentMode: boolean) {
+    _registerServiceRoutes (developmentMode: boolean): void {
         const developmentModeSuffix   = developmentMode ? '' : '.min';
         const hammerheadFileName      = `hammerhead${developmentModeSuffix}.js`;
         const hammerheadScriptContent = read(`../client/${hammerheadFileName}`) as Buffer;
@@ -137,7 +146,7 @@ export default class Proxy extends Router {
         this.GET(SERVICE_ROUTES.iframeTask, (req: http.IncomingMessage, res: http.ServerResponse, serverInfo: ServerInfo) => this._onTaskScriptRequest(req, res, serverInfo, true));
     }
 
-    async _onServiceMessage (req: http.IncomingMessage, res: http.ServerResponse, serverInfo: ServerInfo) {
+    async _onServiceMessage (req: http.IncomingMessage, res: http.ServerResponse, serverInfo: ServerInfo): Promise<void> {
         const body    = await fetchBody(req);
         const msg     = parseAsJson(body);
         const session = msg && this.openSessions.get(msg.sessionId);
@@ -146,14 +155,14 @@ export default class Proxy extends Router {
             try {
                 const result = await session.handleServiceMessage(msg, serverInfo);
 
-                logger.serviceMsg('Service message %j, result %j', msg, result);
+                logger.serviceMsg.onMessage(msg, result);
 
                 respondWithJSON(res, result, false);
             }
             catch (err) {
-                logger.serviceMsg('Service message %j, error %o', msg, err);
+                logger.serviceMsg.onError(msg, err);
 
-                respond500(res, err.toString());
+                respond500(res, errToString(err));
             }
         }
         else
@@ -185,26 +194,26 @@ export default class Proxy extends Router {
             respond500(res, SESSION_IS_NOT_OPENED_ERR);
     }
 
-    _onRequest (req: http.IncomingMessage, res: http.ServerResponse | net.Socket, serverInfo: ServerInfo) {
+    _onRequest (req: http.IncomingMessage, res: http.ServerResponse | net.Socket, serverInfo: ServerInfo): void {
         // NOTE: Not a service request, execute the proxy pipeline.
         if (!this._route(req, res, serverInfo))
             runRequestPipeline(req, res, serverInfo, this.openSessions);
     }
 
-    _onUpgradeRequest (req: http.IncomingMessage, socket: net.Socket, head: Buffer, serverInfo: ServerInfo) {
+    _onUpgradeRequest (req: http.IncomingMessage, socket: net.Socket, head: Buffer, serverInfo: ServerInfo): void {
         if (head && head.length)
             socket.unshift(head);
 
         this._onRequest(req, socket, serverInfo);
     }
 
-    _processStaticContent (handler: StaticContent) {
+    _processStaticContent (handler: StaticContent): void {
         if (handler.isShadowUIStylesheet)
             handler.content = prepareShadowUIStylesheet(handler.content as string);
     }
 
     // API
-    close () {
+    close (): void {
         this.server1.close();
         this.server2.close();
         this._closeSockets();
@@ -226,7 +235,7 @@ export default class Proxy extends Router {
             proxyPort:     this.server1Info.port.toString(),
             proxyProtocol: this.server1Info.protocol,
             sessionId:     session.id,
-            windowId:      session.windowId
+            windowId:      session.options.windowId
         });
     }
 

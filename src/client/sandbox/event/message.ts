@@ -7,7 +7,7 @@ import { parse as parseJSON, stringify as stringifyJSON } from 'json-hammerhead'
 import { isCrossDomainWindows, getTopSameDomainWindow, isWindow, isMessageEvent } from '../../utils/dom';
 import { callEventListener } from '../../utils/event';
 import fastApply from '../../utils/fast-apply';
-import { overrideDescriptor } from '../../utils/property-overriding';
+import { overrideDescriptor } from '../../utils/overriding';
 import Listeners from './listeners';
 import UnloadSandbox from './unload';
 
@@ -136,7 +136,7 @@ export default class MessageSandbox extends SandboxBase {
         const onMessageHandler       = (...args) => fastApply(this, '_onMessage', args);
         const onWindowMessageHandler = (...args) => fastApply(this, '_onWindowMessage', args);
 
-        this._listeners.addInternalEventListener(window, ['message'], onMessageHandler);
+        this._listeners.addInternalEventBeforeListener(window, ['message'], onMessageHandler);
         this._listeners.setEventListenerWrapper(window, ['message'], onWindowMessageHandler);
 
         // NOTE: In Google Chrome, iframes whose src contains html code raise the 'load' event twice.
@@ -148,7 +148,7 @@ export default class MessageSandbox extends SandboxBase {
 
         // @ts-ignore
         overrideDescriptor(window.MessageEvent.prototype, 'data', {
-            getter: function () {
+            getter: function (this: MessageEvent) {
                 const target = this.target;
                 const data   = nativeMethods.messageEventDataGetter.call(this);
 

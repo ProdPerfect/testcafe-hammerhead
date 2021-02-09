@@ -3,26 +3,20 @@ import RequestOptions from '../request-options';
 import http from 'http';
 import https from 'https';
 import { noop } from 'lodash';
-import semver from 'semver';
 import * as requestAgent from './agent';
 import { EventEmitter } from 'events';
 import { getAuthInfo, addCredentials, requiresResBody } from 'webauth';
 import connectionResetGuard from '../connection-reset-guard';
 import { MESSAGE, getText } from '../../messages';
-import { transformHeadersCaseToRaw } from '../header-transforms';
 import logger from '../../utils/logger';
+import * as requestCache from '../cache';
+import IncomingMessageLike from '../incoming-message-like';
 
 const TUNNELING_SOCKET_ERR_RE    = /tunneling socket could not be established/i;
 const TUNNELING_AUTHORIZE_ERR_RE = /statusCode=407/i;
 const SOCKET_HANG_UP_ERR_RE      = /socket hang up/i;
 const IS_DNS_ERR_MSG_RE          = /ECONNREFUSED|ENOTFOUND|EPROTO/;
 const IS_DNS_ERR_CODE_RE         = /ECONNRESET/;
-
-// NOTE: Starting from 8.6 version, Node.js changes behavior related with sending requests
-// to sites using SSL2 and SSL3 protocol versions. It affects the https core module
-// and can break a proxying of some sites. This is why, we are forced to use the special hack.
-// For details, see https://github.com/nodejs/node/issues/16196
-const IS_NODE_VERSION_GREATER_THAN_8_5: boolean = semver.gt(process.version, '8.5.0');
 
 interface DestinationRequestEvents {
     on(event: 'response', listener: (res: http.IncomingMessage) => void): this;
@@ -33,71 +27,72 @@ interface DestinationRequestEvents {
 
 export default class DestinationRequest extends EventEmitter implements DestinationRequestEvents {
     private req: http.ClientRequest;
-    private hasResponse: boolean = false;
-    private credentialsSent: boolean = false;
-    private aborted: boolean = false;
-    private readonly opts: RequestOptions;
-    private readonly isHttps: boolean;
+    private hasResponse = false;
+    private credentialsSent = false;
+    private aborted = false;
     private readonly protocolInterface: any;
     private readonly timeout: number;
 
-    static TIMEOUT = 25 * 1000;
-    static AJAX_TIMEOUT = 2 * 60 * 1000;
-
-    constructor (opts: RequestOptions) {
+    constructor (readonly opts: RequestOptions, readonly cache: boolean) {
         super();
 
-        this.opts              = opts;
-        this.isHttps           = opts.protocol === 'https:';
-        this.protocolInterface = this.isHttps ? https : http;
-        this.timeout           = this.opts.isAjax ? DestinationRequest.AJAX_TIMEOUT : DestinationRequest.TIMEOUT;
+        this.protocolInterface = this.opts.isHttps ? https : http;
+        this.timeout           = this.opts.isAjax ? opts.requestTimeout.ajax : opts.requestTimeout.page;
 
-        // NOTE: Ignore SSL auth.
-        if (this.isHttps) {
-            opts.rejectUnauthorized = false;
-
-            if (IS_NODE_VERSION_GREATER_THAN_8_5)
-                opts.ecdhCurve = 'auto';
-        }
+        if (this.opts.isHttps)
+            opts.ignoreSSLAuth();
 
         requestAgent.assign(this.opts);
         this._send();
     }
 
+    _sendReal (waitForData?: boolean): void {
+        const preparedOptions = this.opts.prepare();
+
+        this.req = this.protocolInterface.request(preparedOptions, res => {
+            if (waitForData) {
+                res.on('data', noop);
+                res.once('end', () => this._onResponse(res));
+            }
+        });
+
+        if (logger.destinationSocket.enabled) {
+            this.req.on('socket', socket => {
+                socket.once('data', data => logger.destinationSocket.onFirstChunk(this.opts, data));
+                socket.once('error', err => logger.destinationSocket.onError(this.opts, err));
+            });
+        }
+
+        if (!waitForData)
+            this.req.on('response', (res: http.IncomingMessage) => this._onResponse(res));
+
+        this.req.on('error', (err: Error) => this._onError(err));
+        this.req.on('upgrade', (res: http.IncomingMessage, socket: net.Socket, head: Buffer) => this._onUpgrade(res, socket, head));
+        this.req.setTimeout(this.timeout, () => this._onTimeout());
+        this.req.write(this.opts.body);
+        this.req.end();
+
+        logger.destination.onRequest(this.opts);
+    }
+
     _send (waitForData?: boolean): void {
         connectionResetGuard(() => {
-            const storedHeaders = this.opts.headers;
+            if (this.cache) {
+                const cachedResponse = requestCache.getResponse(this.opts);
 
-            // NOTE: The headers are converted to raw headers because some sites ignore headers in a lower case. (GH-1380)
-            // We also need to restore the request option headers to a lower case because headers may change
-            // if a request is unauthorized, so there can be duplicated headers, for example, 'www-authenticate' and 'WWW-Authenticate'.
-            this.opts.headers = transformHeadersCaseToRaw(this.opts.headers, this.opts.rawHeaders);
-            this.req          = this.protocolInterface.request(this.opts, res => {
-                if (waitForData) {
-                    res.on('data', noop);
-                    res.once('end', () => this._onResponse(res));
+                if (cachedResponse) {
+                    // NOTE: To store async order of the 'response' event
+                    setImmediate(() => {
+                        this._emitOnResponse(cachedResponse.res);
+                    }, 0);
+
+                    logger.destination.onCachedRequest(this.opts, cachedResponse.hitCount);
+
+                    return;
                 }
-            });
-            this.opts.headers = storedHeaders;
-
-            if (logger.destinationSocket.enabled) {
-                this.req.on('socket', socket => {
-                    socket.once('data', data =>
-                        logger.destinationSocket('Destination request socket first chunk of data %s %d %s', this.opts.requestId, data.length, JSON.stringify(data.toString())));
-                    socket.once('error', err => logger.destinationSocket('Destination request socket error %s %o', this.opts.requestId, err));
-                });
             }
 
-            if (!waitForData)
-                this.req.on('response', (res: http.IncomingMessage) => this._onResponse(res));
-
-            this.req.on('error', (err: Error) => this._onError(err));
-            this.req.on('upgrade', (res: http.IncomingMessage, socket: net.Socket, head: Buffer) => this._onUpgrade(res, socket, head));
-            this.req.setTimeout(this.timeout, () => this._onTimeout());
-            this.req.write(this.opts.body);
-            this.req.end();
-
-            logger.destination('Destination request %s %s %s %j', this.opts.requestId, this.opts.method, this.opts.url, this.opts.headers);
+            this._sendReal(waitForData);
         });
     }
 
@@ -116,22 +111,26 @@ export default class DestinationRequest extends EventEmitter implements Destinat
     }
 
     _onResponse (res: http.IncomingMessage): void {
-        logger.destination('Destination response %s %d %j', this.opts.requestId, res.statusCode, res.headers);
+        logger.destination.onResponse(this.opts, res);
 
         if (this._shouldResendWithCredentials(res))
             this._resendWithCredentials(res);
-        else if (!this.isHttps && this.opts.proxy && res.statusCode === 407) {
-            logger.destination('Destination error: Cannot authorize to proxy %s', this.opts.requestId);
+        else if (!this.opts.isHttps && this.opts.proxy && res.statusCode === 407) {
+            logger.destination.onProxyAuthenticationError(this.opts);
             this._fatalError(MESSAGE.cantAuthorizeToProxy, this.opts.proxy.host);
         }
-        else {
-            this.hasResponse = true;
-            this.emit('response', res);
-        }
+        else
+            this._emitOnResponse(res);
+    }
+
+    _emitOnResponse (res: http.IncomingMessage | IncomingMessageLike) {
+        this.hasResponse = true;
+
+        this.emit('response', res);
     }
 
     _onUpgrade (res: http.IncomingMessage, socket: net.Socket, head: Buffer): void {
-        logger.destination('Destination upgrade %s %d %j', this.opts.requestId, res.statusCode, res.headers);
+        logger.destination.onUpgradeRequest(this.opts, res);
 
         if (head && head.length)
             socket.unshift(head);
@@ -139,8 +138,8 @@ export default class DestinationRequest extends EventEmitter implements Destinat
         this._onResponse(res);
     }
 
-    async _resendWithCredentials (res): Promise<void> {
-        logger.destination('Destination request resent with credentials %s', this.opts.requestId);
+    _resendWithCredentials (res): void {
+        logger.destination.onResendWithCredentials(this.opts);
 
         addCredentials(this.opts.credentials, this.opts, res, this.protocolInterface);
         this.credentialsSent = true;
@@ -165,7 +164,7 @@ export default class DestinationRequest extends EventEmitter implements Destinat
     }
 
     _isTunnelingErr (err): boolean {
-        return this.isHttps && this.opts.proxy && err.message && TUNNELING_SOCKET_ERR_RE.test(err.message);
+        return this.opts.isHttps && this.opts.proxy && err.message && TUNNELING_SOCKET_ERR_RE.test(err.message);
     }
 
     _isSocketHangUpErr (err): boolean {
@@ -176,7 +175,7 @@ export default class DestinationRequest extends EventEmitter implements Destinat
     }
 
     _onTimeout (): void {
-        logger.destination('Destination request timeout %s (%d ms)', this.opts.requestId, this.timeout);
+        logger.destination.onTimeoutError(this.opts, this.timeout);
 
         // NOTE: this handler is also called if we get an error response (for example, 404). So, we should check
         // for the response presence before raising the timeout error.
@@ -185,7 +184,7 @@ export default class DestinationRequest extends EventEmitter implements Destinat
     }
 
     _onError (err: Error): void {
-        logger.destination('Destination error %s %o', this.opts.requestId, err);
+        logger.destination.onError(this.opts, err);
 
         if (this._isSocketHangUpErr(err))
             this.emit('socketHangUp');
@@ -203,7 +202,7 @@ export default class DestinationRequest extends EventEmitter implements Destinat
         }
 
         else if (this._isDNSErr(err)) {
-            if (!this.isHttps && this.opts.proxy)
+            if (!this.opts.isHttps && this.opts.proxy)
                 this._fatalError(MESSAGE.cantEstablishProxyConnection, this.opts.proxy.host);
             else
                 this._fatalError(MESSAGE.cantResolveUrl);

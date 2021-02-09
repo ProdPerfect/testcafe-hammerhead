@@ -13,7 +13,7 @@
 
     var INTERNAL_PROPS = hammerhead.get('../processing/dom/internal-properties');
     var INSTRUCTION    = hammerhead.get('../processing/script/instruction');
-    var destLocation   = hammerhead.get('./utils/destination-location');
+    var destLocation   = hammerhead.utils.destLocation;
     var iframeSandbox  = hammerhead.sandbox.iframe;
     var cookieSandbox  = hammerhead.sandbox.cookie;
 
@@ -26,7 +26,7 @@
     };
 
     var iframeTaskScriptTemplate = [
-        'window["%hammerhead%"].get("./utils/destination-location").forceLocation("{{{location}}}");',
+        'window["%hammerhead%"].utils.destLocation.forceLocation("{{{location}}}");',
         'window["%hammerhead%"].start({',
         '    referer : {{{referer}}},',
         '    cookie: {{{cookie}}},',
@@ -60,7 +60,7 @@
 
         if (iframe.id.indexOf('test') !== -1) {
             iframe.contentWindow.eval.call(iframe.contentWindow, [
-                'window["%hammerhead%"].get("./utils/destination-location").forceLocation("' + location + '");',
+                'window["%hammerhead%"].utils.destLocation.forceLocation("' + location + '");',
                 'window["%hammerhead%"].start({',
                 '    referer: ' + JSON.stringify(referer) + ',',
                 '    serviceMsgUrl: "' + serviceMsgUrl + '",',
@@ -97,6 +97,7 @@
     window.setProperty   = window[INSTRUCTION.setProperty];
     window.callMethod    = window[INSTRUCTION.callMethod];
     window.getLocation   = window[INSTRUCTION.getLocation];
+    window.getEval       = window[INSTRUCTION.getEval];
     window.hammerhead    = hammerhead;
 
     window.getCrossDomainPageUrl = function (filePath, resourceName) {
@@ -197,6 +198,14 @@
     };
 
     window.noop = function () {
+    };
+
+    window.checkStringRepresentation = function (wrappedFn, originalFn, fnName) {
+        strictEqual(wrappedFn.toString(), originalFn.toString(),
+            fnName + ': the outputs of the "toString()" method should be the same');
+        strictEqual(Function.prototype.toString.call(wrappedFn), nativeMethods.functionToString.call(originalFn),
+            fnName + ': the outputs of the "Function.prototype.toString" function should be the same');
+        strictEqual(wrappedFn.name, originalFn.name, fnName + ': the function names should be the same');
     };
 
     QUnitGlobals.WAIT_FOR_IFRAME_TIMEOUT = 20000;

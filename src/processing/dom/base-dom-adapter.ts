@@ -21,7 +21,7 @@ export default abstract class BaseDomAdapter {
     abstract hasAttr (el: HTMLElement | ASTNode, attr: string): boolean;
     abstract isSVGElement (el: HTMLElement | ASTNode): boolean;
     abstract hasEventHandler (el: HTMLElement | ASTNode): boolean;
-    abstract getTagName (el: HTMLElement | ASTNode): string;
+    abstract getTagName (el: Element | ASTNode): string;
     abstract setAttr (el: HTMLElement | ASTNode, attr: string, value: string): void;
     abstract setScriptContent (el: HTMLElement | ASTNode, content: string): void;
     abstract getScriptContent (el: HTMLElement | ASTNode): string;
@@ -29,12 +29,11 @@ export default abstract class BaseDomAdapter {
     abstract setStyleContent (el: HTMLElement | ASTNode, content: string): void;
     abstract needToProcessContent (el: HTMLElement | ASTNode): boolean;
     abstract needToProcessUrl (tagName: string, target: string): boolean;
-    abstract attachEventEmitter (domProcessor: any): void;
     abstract hasIframeParent (el: HTMLElement | ASTNode): boolean;
-    abstract getCrossDomainPort (): string;
     abstract getProxyUrl (resourceUrl: string, opts: object): string;
     abstract isTopParentIframe (el: HTMLElement | ASTNode): boolean;
     abstract sameOriginCheck (destUrl: string, resourceUrl: string): boolean;
-    abstract getClassName (el: HTMLElement | ASTNode): string;
+    abstract getClassName (el: Element | ASTNode): string;
     abstract isExistingTarget (target: string, el?: HTMLElement | ASTNode): boolean;
+    abstract processSrcdocAttr (string: string): string;
 }

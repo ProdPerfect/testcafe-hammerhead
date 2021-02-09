@@ -5,6 +5,7 @@ import * as listeningCtx from './listening-context';
 import { preventDefault, stopPropagation, DOM_EVENTS, isValidEventListener, callEventListener } from '../../utils/event';
 import { isWindow } from '../../utils/dom';
 import { isIE11 } from '../../utils/browser';
+import { isNativeFunction, overrideFunction, overrideStringRepresentation } from '../../utils/overriding';
 
 const LISTENED_EVENTS = [
     'click', 'mousedown', 'mouseup', 'dblclick', 'contextmenu', 'mousemove', 'mouseover', 'mouseout',
@@ -18,23 +19,25 @@ const LISTENED_EVENTS = [
 const EVENT_SANDBOX_DISPATCH_EVENT_FLAG = 'hammerhead|event-sandbox-dispatch-event-flag';
 
 export default class Listeners extends EventEmitter {
-    EVENT_LISTENER_ATTACHED_EVENT: string = 'hammerhead|event|event-listener-attached';
-    EVENT_LISTENER_DETACHED_EVENT: string = 'hammerhead|event|event-listener-detached';
+    EVENT_LISTENER_ATTACHED_EVENT = 'hammerhead|event|event-listener-attached';
+    EVENT_LISTENER_DETACHED_EVENT = 'hammerhead|event|event-listener-detached';
 
     listeningCtx: any;
 
-    addInternalEventListener: Function;
-    addFirstInternalHandler: Function;
-    removeInternalEventListener: Function;
+    addInternalEventBeforeListener: Function;
+    addFirstInternalEventBeforeListener: Function;
+    addInternalEventAfterListener: Function;
+    removeInternalEventBeforeListener: Function;
 
     constructor () {
         super();
 
         this.listeningCtx = listeningCtx;
 
-        this.addInternalEventListener    = this.listeningCtx.addInternalHandler;
-        this.addFirstInternalHandler     = this.listeningCtx.addFirstInternalHandler;
-        this.removeInternalEventListener = this.listeningCtx.removeInternalHandler;
+        this.addInternalEventBeforeListener      = this.listeningCtx.addInternalBeforeHandler;
+        this.addFirstInternalEventBeforeListener = this.listeningCtx.addFirstInternalBeforeHandler;
+        this.addInternalEventAfterListener       = this.listeningCtx.addInternalAfterHandler;
+        this.removeInternalEventBeforeListener   = this.listeningCtx.removeInternalBeforeHandler;
     }
 
     private static _getNativeAddEventListener (el: any) {
@@ -64,7 +67,7 @@ export default class Listeners extends EventEmitter {
     }
 
     private static _getEventListenerWrapper (eventCtx, listener) {
-        return function (e: Event) {
+        return function (this: EventTarget, e: Event) {
             // NOTE: Ignore IE11's and Edge's service handlers (GH-379)
             if (Listeners._isIEServiceHandler(listener) || eventCtx.cancelOuterHandlers)
                 return null;
@@ -97,7 +100,7 @@ export default class Listeners extends EventEmitter {
     private _createEventHandler (): Function {
         const listeners = this;
 
-        return function (e: Event) {
+        return function (this: EventTarget, e: Event) {
             const el                  = this as HTMLElement;
             const elWindow            = el[INTERNAL_PROPS.processedContext] || window;
             let eventPrevented        = false;
@@ -108,13 +111,13 @@ export default class Listeners extends EventEmitter {
             if (!eventCtx)
                 return;
 
-            const internalHandlers = eventCtx.internalHandlers;
+            const internalHandlers = eventCtx.internalBeforeHandlers;
 
             eventCtx.cancelOuterHandlers = false;
 
-            const preventEvent = () => {
+            const preventEvent = (allowBubbling?: boolean) => {
                 eventPrevented = true;
-                preventDefault(e);
+                preventDefault(e, allowBubbling);
             };
 
             const cancelHandlers = () => {
@@ -146,7 +149,7 @@ export default class Listeners extends EventEmitter {
         const listeners = this;
 
         return {
-            addEventListener: function (...args: any[]) {
+            addEventListener: function (this: Window | HTMLElement | Document, ...args: any[]) {
                 const [eventType, listener]  = args;
                 const el                     = this;
                 const useCapture             = Listeners._getUseCaptureParam(args[2]);
@@ -170,11 +173,13 @@ export default class Listeners extends EventEmitter {
 
                 const res = nativeAddEventListener.apply(el, args);
 
+                listeningCtx.updateInternalAfterHandlers(el, eventType);
+
                 listeners.emit(listeners.EVENT_LISTENER_ATTACHED_EVENT, { el, eventType, listener });
 
                 return res;
             },
-            removeEventListener: function (...args: any[]) {
+            removeEventListener: function (this: Window | HTMLElement | Document, ...args: any[]) {
                 const [eventType, listener]     = args;
                 const el                        = this;
                 const useCapture                = Listeners._getUseCaptureParam(args[2]);
@@ -208,11 +213,19 @@ export default class Listeners extends EventEmitter {
         this.listeningCtx.addListeningElement(el, events);
 
         if (isIE11) {
-            if (!el.addEventListener || nativeMethods.isNativeCode(el.addEventListener)) {
-                const overriddenMethods = this.createOverriddenMethods();
+            const overriddenMethods = this.createOverriddenMethods();
 
+            if (!el.addEventListener) {
+                // NOTE: we cannot use 'overrideFunction' here since the functions may not exist
                 el.addEventListener    = overriddenMethods.addEventListener;
                 el.removeEventListener = overriddenMethods.removeEventListener;
+
+                overrideStringRepresentation(el.addEventListener, nativeMethods.addEventListener);
+                overrideStringRepresentation(el.removeEventListener, nativeMethods.removeEventListener);
+            }
+            else if (isNativeFunction(el.addEventListener)) {
+                overrideFunction(el, 'addEventListener', overriddenMethods.addEventListener);
+                overrideFunction(el, 'removeEventListener', overriddenMethods.removeEventListener);
             }
         }
     }
@@ -223,8 +236,8 @@ export default class Listeners extends EventEmitter {
         if (isIE11) {
             const overriddenMethods = this.createOverriddenMethods();
 
-            doc.body.addEventListener    = overriddenMethods.addEventListener;
-            doc.body.removeEventListener = overriddenMethods.removeEventListener;
+            overrideFunction(doc.body, 'addEventListener', overriddenMethods.addEventListener);
+            overrideFunction(doc.body, 'removeEventListener', overriddenMethods.removeEventListener);
         }
     }
 

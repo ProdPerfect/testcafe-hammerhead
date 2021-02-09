@@ -1,4 +1,7 @@
-import { get as getDestLocation, getParsed as getParsedDestLocation } from '../../../utils/destination-location';
+import {
+    get as getDestLocation,
+    getParsed as getParsedDestLocation
+} from '../../../utils/destination-location';
 import {
     getProxyUrl,
     changeDestUrlPart,
@@ -15,13 +18,15 @@ import {
     prepareUrl,
     SPECIAL_BLANK_PAGE
 } from '../../../../utils/url';
+import * as domUtils from '../../../utils/dom';
 import nativeMethods from '../../native-methods';
 import urlResolver from '../../../utils/url-resolver';
 import DomProcessor from '../../../../processing/dom';
 import DOMStringListWrapper from './ancestor-origins-wrapper';
 import IntegerIdGenerator from '../../../utils/integer-id-generator';
-import { createOverriddenDescriptor } from '../../../utils/property-overriding';
+import { createOverriddenDescriptor, overrideStringRepresentation } from '../../../utils/overriding';
 import MessageSandbox from '../../event/message';
+import { isIframeWindow } from '../../../utils/dom';
 
 const GET_ORIGIN_CMD      = 'hammerhead|command|get-origin';
 const ORIGIN_RECEIVED_CMD = 'hammerhead|command|origin-received';
@@ -35,8 +40,14 @@ function getLocationUrl (window: Window): string | undefined {
     }
 }
 
-export default class LocationWrapper {
+class LocationInheritor {}
+
+LocationInheritor.prototype = Location.prototype;
+
+export default class LocationWrapper extends LocationInheritor {
     constructor (window: Window, messageSandbox: MessageSandbox, onChanged: Function) {
+        super();
+
         const parsedLocation         = parseProxyUrl(getLocationUrl(window) as string);
         const locationResourceType   = parsedLocation ? parsedLocation.resourceType : '';
         const parsedResourceType     = parseResourceType(locationResourceType);
@@ -46,7 +57,7 @@ export default class LocationWrapper {
         const locationPropsOwner     = isLocationPropsInProto ? window.Location.prototype : window.location;
         const locationProps: any     = {};
 
-        parsedResourceType.isIframe = parsedResourceType.isIframe || window !== window.top;
+        parsedResourceType.isIframe = parsedResourceType.isIframe || isIframeWindow(window);
 
         const resourceType   = getResourceTypeString({
             isIframe: parsedResourceType.isIframe,
@@ -54,7 +65,7 @@ export default class LocationWrapper {
         });
         const getHref        = () => {
             // eslint-disable-next-line no-restricted-properties
-            if (window !== window.top && window.location.href === SPECIAL_BLANK_PAGE)
+            if (isIframeWindow(window) && window.location.href === SPECIAL_BLANK_PAGE)
                 return SPECIAL_BLANK_PAGE;
 
             const locationUrl    = getDestLocation();
@@ -180,7 +191,13 @@ export default class LocationWrapper {
 
         const createLocationPropertyDesc = (property, nativePropSetter) => {
             locationProps[property] = createOverriddenDescriptor(locationPropsOwner, property, {
-                getter: () => getParsedDestLocation()[property],
+                getter: () => {
+                    const frameElement       = domUtils.getFrameElement(window);
+                    const inIframeWithoutSrc = frameElement && domUtils.isIframeWithoutSrc(frameElement);
+                    const parsedDestLocation = inIframeWithoutSrc ? window.location : getParsedDestLocation();
+
+                    return parsedDestLocation[property];
+                },
                 setter: value => {
                     const newLocation = changeDestUrlPart(window.location.toString(), nativePropSetter, value, resourceType);
 
@@ -239,3 +256,10 @@ export default class LocationWrapper {
         nativeMethods.objectDefineProperties(this, locationProps);
     }
 }
+
+// NOTE: window.Location in IE11 is object
+if (typeof Location !== 'function')
+    LocationWrapper.toString = () => Location.toString();
+else
+    overrideStringRepresentation(LocationWrapper, Location);
+

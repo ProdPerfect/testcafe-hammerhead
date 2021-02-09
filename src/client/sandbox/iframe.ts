@@ -3,11 +3,12 @@ import SandboxBase from './base';
 import settings from '../settings';
 import nativeMethods from '../sandbox/native-methods';
 import DomProcessor from '../../processing/dom';
-import { isShadowUIElement, isIframeWithoutSrc, getTagName } from '../utils/dom';
+import { isShadowUIElement, isIframeWithoutSrc, isIframeElement, isFrameElement } from '../utils/dom';
 import { isFirefox, isWebKit, isIE } from '../utils/browser';
 import * as JSON from 'json-hammerhead';
 import NodeMutation from './node/mutation';
 import CookieSandbox from './cookie';
+import { isNativeFunction } from '../utils/overriding';
 
 const IFRAME_WINDOW_INITED = 'hammerhead|iframe-window-inited';
 
@@ -30,7 +31,7 @@ export default class IframeSandbox extends SandboxBase {
         this.iframeNativeMethodsBackup = null;
     }
 
-    private _shouldSaveIframeNativeMethods (iframe: HTMLIFrameElement | HTMLFrameElement) {
+    private _shouldSaveIframeNativeMethods (iframe: HTMLIFrameElement | HTMLFrameElement): boolean {
         if (!isWebKit)
             return false;
 
@@ -98,7 +99,7 @@ export default class IframeSandbox extends SandboxBase {
             // NOTE: Even if iframe is not loaded (iframe.contentDocument.documentElement does not exist), we
             // still need to override the document.write method without initializing Hammerhead. This method can
             // be called before iframe is fully loaded, we should override it now.
-            if (contentDocument.write.toString() === this.nativeMethods.documentWrite.toString())
+            if (isNativeFunction(contentDocument.write))
                 this.emit(this.IFRAME_DOCUMENT_CREATED_EVENT, { iframe });
         }
         else if (!contentWindow[IFRAME_WINDOW_INITED] && !contentWindow[INTERNAL_PROPS.hammerhead]) {
@@ -152,10 +153,8 @@ export default class IframeSandbox extends SandboxBase {
         if (isShadowUIElement(el))
             return;
 
-        const tagName = getTagName(el);
-
-        if (tagName === 'iframe' && nativeMethods.contentWindowGetter.call(el) ||
-            tagName === 'frame' && nativeMethods.frameContentWindowGetter.call(el))
+        if (isIframeElement(el) && nativeMethods.contentWindowGetter.call(el) ||
+            isFrameElement(el) && nativeMethods.frameContentWindowGetter.call(el))
             this._raiseReadyToInitEvent(el);
 
         // NOTE: This handler exists for iframes without the src attribute. In some the browsers (e.g. Chrome)

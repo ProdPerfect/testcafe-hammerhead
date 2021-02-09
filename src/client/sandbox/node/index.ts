@@ -20,6 +20,7 @@ import * as browserUtils from '../../utils/browser';
 import ChildWindowSandbox from '../child-window';
 import DocumentTitleStorage from './document/title-storage';
 import DocumentTitleStorageInitializer from './document/title-storage-initializer';
+import { isIframeWindow } from '../../utils/dom';
 
 const ATTRIBUTE_SELECTOR_REG_EX          = /\[([\w-]+)(\^?=.+?)]/g;
 const ATTRIBUTE_OPERATOR_WITH_HASH_VALUE = /^\W+\s*#/;
@@ -52,13 +53,14 @@ export default class NodeSandbox extends SandboxBase {
         });
 
         this._documentTitleStorageInitializer = NodeSandbox._createDocumentTitleStorageInitializer();
-        this.doc                              = new DocumentSandbox(this, this.shadowUI, this._cookieSandbox, this._documentTitleStorageInitializer);
-        this.win                              = new WindowSandbox(this, this._eventSandbox, this._uploadSandbox, this.mutation, this._childWindowSandbox, this._documentTitleStorageInitializer);
-        this.element                          = new ElementSandbox(this, this._uploadSandbox, this.iframeSandbox, this.shadowUI, this._eventSandbox, this._childWindowSandbox);
+
+        this.doc     = new DocumentSandbox(this, this.shadowUI, this._cookieSandbox, this._documentTitleStorageInitializer);
+        this.win     = new WindowSandbox(this, this._eventSandbox, this._uploadSandbox, this.mutation, this._childWindowSandbox, this._documentTitleStorageInitializer);
+        this.element = new ElementSandbox(this, this._uploadSandbox, this.iframeSandbox, this.shadowUI, this._eventSandbox, this._childWindowSandbox);
     }
 
     private static _createDocumentTitleStorageInitializer (): DocumentTitleStorageInitializer | null {
-        if (window !== window.top)
+        if (isIframeWindow(window))
             return null;
 
         const documentTitleStorage = new DocumentTitleStorage(document);
@@ -71,7 +73,7 @@ export default class NodeSandbox extends SandboxBase {
         this.mutation.onBodyCreated(this.document.body as HTMLBodyElement);
     }
 
-    private _processElement (el: HTMLElement): void {
+    private _processElement (el: Element): void {
         const processedContext = el[INTERNAL_PROPS.processedContext];
 
         if (domUtils.isShadowUIElement(el) || processedContext === this.window)
@@ -106,7 +108,7 @@ export default class NodeSandbox extends SandboxBase {
             this._documentTitleStorageInitializer.onPageTitleLoaded();
     }
 
-    processNodes (el: HTMLElement, doc?: Document): void {
+    processNodes (el?: Element | DocumentFragment, doc?: Document): void {
         if (!el) {
             doc = doc || this.document;
 
@@ -114,7 +116,8 @@ export default class NodeSandbox extends SandboxBase {
                 this.processNodes(doc.documentElement);
         }
         else if (el.querySelectorAll) {
-            this._processElement(el);
+            if (el.nodeType !== Node.DOCUMENT_FRAGMENT_NODE)
+                this._processElement(el as Element);
 
             const children = getNativeQuerySelectorAll(el).call(el, '*');
             const length   = nativeMethods.nodeListLengthGetter.call(children);
@@ -148,7 +151,7 @@ export default class NodeSandbox extends SandboxBase {
             contentWindow[INTERNAL_PROPS.iframeNativeMethods] = iframeNativeMethods;
 
             // NOTE: Override only the document (in fact, we only need the 'write' and 'writeln' methods).
-            this.doc.attach(contentWindow, contentDocument);
+            this.doc.attach(contentWindow, contentDocument, true);
         });
 
         // NOTE: In Google Chrome, iframes whose src contains html code raise the 'load' event twice.

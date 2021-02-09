@@ -4,6 +4,7 @@ export interface ServerInfo {
     crossDomainPort: number;
     protocol: string;
     domain: string;
+    cacheRequests: boolean;
 }
 
 export interface ServiceMessage {
@@ -19,4 +20,19 @@ export interface StaticContent {
     contentType: string;
     etag?: string;
     isShadowUIStylesheet?: boolean;
+}
+
+interface RouterOptions {
+    staticContentCaching?: object;
+}
+
+interface RequestTimeout {
+    page?: number;
+    ajax?: number;
+}
+
+interface ProxyOptions extends RouterOptions {
+    ssl: object;
+    developmentMode: boolean;
+    cache: boolean;
 }

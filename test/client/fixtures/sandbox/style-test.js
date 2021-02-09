@@ -1,4 +1,4 @@
-var urlUtils      = hammerhead.get('./utils/url');
+var urlUtils      = hammerhead.utils.url;
 var nativeMethods = hammerhead.nativeMethods;
 var StyleSandbox  = hammerhead.get('./sandbox/style');
 var styleSandbox  = hammerhead.sandbox.style;
@@ -132,6 +132,19 @@ test('getPropertyValue, setProperty, getPropertyValue (GH-1212)', function () {
     ok(!div.style.background);
     ok(!div.style.getPropertyValue('background'));
     ok(!div.style.removeProperty('background'));
+});
+
+test('wrappers of native functions should return the correct string representations', function () {
+    window.checkStringRepresentation(window.CSSStyleSheet.prototype.insertRule, nativeMethods.styleInsertRule,
+        'CSSStyleSheet.prototype.insertRule');
+    window.checkStringRepresentation(window.CSSStyleDeclaration.prototype.getPropertyValue,
+        nativeMethods.styleGetPropertyValue,
+        'CSSStyleDeclaration.prototype.getPropertyValue');
+    window.checkStringRepresentation(window.CSSStyleDeclaration.prototype.setProperty, nativeMethods.styleSetProperty,
+        'CSSStyleDeclaration.prototype.setProperty');
+    window.checkStringRepresentation(window.CSSStyleDeclaration.prototype.removeProperty,
+        nativeMethods.styleRemoveProperty,
+        'CSSStyleDeclaration.prototype.removeProperty');
 });
 
 module('regression');

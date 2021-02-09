@@ -1,3 +1,4 @@
+import util from 'util';
 import parse5, { ASTNode } from 'parse5';
 import SHADOW_UI_CLASSNAME from '../../shadow-ui/class-name';
 import DomProcessor from '../dom';
@@ -5,25 +6,16 @@ import DomAdapter from '../dom/parse5-dom-adapter';
 import ResourceProcessorBase from './resource-processor-base';
 import * as parse5Utils from '../../utils/parse5';
 import getBOM from '../../utils/get-bom';
-import INTERNAL_PROPS from '../../processing/dom/internal-properties';
 import getStorageKey from '../../utils/get-storage-key';
-import createSelfRemovingScript from '../../utils/create-self-removing-script';
+import SELF_REMOVING_SCRIPTS from '../../utils/self-removing-scripts';
 import RequestPipelineContext from '../../request-pipeline/context';
 import Charset from '../encoding/charset';
 import BaseDomAdapter from '../dom/base-dom-adapter';
 import SERVICE_ROUTES from '../../proxy/service-routes';
 
-const BODY_CREATED_EVENT_SCRIPT = createSelfRemovingScript(`
-    if (window["${ INTERNAL_PROPS.hammerhead }"])
-        window["${ INTERNAL_PROPS.hammerhead }"].sandbox.node.raiseBodyCreatedEvent();
-`);
-
-const ORIGIN_FIRST_TITLE_ELEMENT_LOADED_SCRIPT = createSelfRemovingScript(`
-    window["${ INTERNAL_PROPS.hammerhead }"].sandbox.node.onOriginFirstTitleElementInHeadLoaded();
-`);
-
-const PARSED_BODY_CREATED_EVENT_SCRIPT                = parse5.parseFragment(BODY_CREATED_EVENT_SCRIPT).childNodes[0];
-const PARSED_ORIGIN_FIRST_TITLE_ELEMENT_LOADED_SCRIPT = parse5.parseFragment(ORIGIN_FIRST_TITLE_ELEMENT_LOADED_SCRIPT).childNodes[0];
+const PARSED_BODY_CREATED_EVENT_SCRIPT                = parse5.parseFragment(SELF_REMOVING_SCRIPTS.onBodyCreated).childNodes[0];
+const PARSED_ORIGIN_FIRST_TITLE_ELEMENT_LOADED_SCRIPT = parse5.parseFragment(SELF_REMOVING_SCRIPTS.onOriginFirstTitleLoaded).childNodes[0];
+const PARSED_INIT_SCRIPT_FOR_IFRAME_TEMPLATE          = parse5.parseFragment(SELF_REMOVING_SCRIPTS.iframeInit).childNodes[0];
 
 interface PageProcessingOptions {
     crossDomainProxyPort: number;
@@ -44,11 +36,9 @@ class PageProcessor extends ResourceProcessorBase {
     }
 
     private _createRestoreStoragesScript (storageKey: string, storages): ASTNode {
-        const scriptStr              = createSelfRemovingScript(`
-            window.localStorage.setItem("${ storageKey }", ${ JSON.stringify(storages.localStorage) });
-            window.sessionStorage.setItem("${ storageKey }", ${ JSON.stringify(storages.sessionStorage) });
-        `);
-        const parsedDocumentFragment = parse5.parseFragment(scriptStr);
+        const parsedDocumentFragment = parse5.parseFragment(util.format(SELF_REMOVING_SCRIPTS.restoreStorages,
+            storageKey, JSON.stringify(storages.localStorage),
+            storageKey, JSON.stringify(storages.sessionStorage)));
 
         return parsedDocumentFragment.childNodes[0];
     }
@@ -173,7 +163,7 @@ class PageProcessor extends ResourceProcessorBase {
         parse5Utils.insertBeforeFirstScript(restoreStoragesScript, head);
     }
 
-    private _addBodyCreatedEventScript (body: ASTNode): void {
+    private static _addBodyCreatedEventScript (body: ASTNode): void {
         parse5Utils.unshiftElement(PARSED_BODY_CREATED_EVENT_SCRIPT, body);
     }
 
@@ -184,16 +174,19 @@ class PageProcessor extends ResourceProcessorBase {
                !ctx.contentInfo.isFileDownload;
     }
 
-    processResource (html: string, ctx: RequestPipelineContext, charset: Charset, urlReplacer: Function): string | symbol {
+    processResource (html: string, ctx: RequestPipelineContext, charset: Charset, urlReplacer: Function, isSrcdoc = false): string | symbol {
         const processingOpts = PageProcessor._getPageProcessingOptions(ctx, urlReplacer);
         const bom            = getBOM(html);
+
+        if (isSrcdoc)
+            processingOpts.isIframe = true;
 
         html = bom ? html.replace(bom, '') : html;
 
         PageProcessor._prepareHtml(html, processingOpts);
 
         const root       = parse5.parse(html);
-        const domAdapter = new DomAdapter(processingOpts.isIframe, processingOpts.crossDomainProxyPort.toString());
+        const domAdapter = new DomAdapter(processingOpts.isIframe, ctx, charset, urlReplacer);
         const elements   = parse5Utils.findElementsByTagNames(root, ['base', 'meta', 'head', 'body', 'frameset']);
         const base       = elements.base ? elements.base[0] : null;
         const baseUrl    = base ? domAdapter.getAttr(base, 'href') : '';
@@ -201,20 +194,24 @@ class PageProcessor extends ResourceProcessorBase {
         const head       = elements.head[0];
         const body       = elements.body ? elements.body[0] : elements.frameset[0];
 
-        if (metas && charset.fromMeta(PageProcessor._getPageMetas(metas, domAdapter)))
+        if (!isSrcdoc && metas && charset.fromMeta(PageProcessor._getPageMetas(metas, domAdapter)))
             return this.RESTART_PROCESSING;
 
         const domProcessor = new DomProcessor(domAdapter);
-        const replacer     = (resourceUrl, resourceType, charsetAttrValue) => urlReplacer(resourceUrl, resourceType, charsetAttrValue, baseUrl);
+        const replacer     = (resourceUrl, resourceType, charsetAttrValue, isCrossDomain = false) =>
+            urlReplacer(resourceUrl, resourceType, charsetAttrValue, baseUrl, isCrossDomain);
 
         domProcessor.forceProxySrcForImage = ctx.session.hasRequestEventListeners();
-        domProcessor.allowMultipleWindows  = ctx.session.allowMultipleWindows;
+        domProcessor.allowMultipleWindows  = ctx.session.options.allowMultipleWindows;
+
         parse5Utils.walkElements(root, el => domProcessor.processElement(el, replacer));
 
-        if (!ctx.isHtmlImport) {
+        if (isSrcdoc)
+            parse5Utils.unshiftElement(PARSED_INIT_SCRIPT_FOR_IFRAME_TEMPLATE, head);
+        else if (!ctx.isHtmlImport) {
             PageProcessor._addPageResources(head, processingOpts);
             PageProcessor._addPageOriginFirstTitleParsedScript(head, ctx);
-            this._addBodyCreatedEventScript(body);
+            PageProcessor._addBodyCreatedEventScript(body);
 
             if (ctx.restoringStorages && !processingOpts.isIframe)
                 this._addRestoreStoragesScript(ctx, head);

@@ -7,23 +7,24 @@ import ResponseMock from './request-hooks/response-mock';
 import { parseClientSyncCookieStr } from '../utils/cookie';
 import { ParsedClientSyncCookie } from '../typings/cookie';
 import RequestFilterRule from './request-hooks/request-filter-rule';
-import IncomingMessageMock from './incoming-message-mock';
+import IncomingMessageLike from './incoming-message-like';
 import RequestOptions from './request-options';
 import { ParsedProxyUrl } from '../typings/url';
-import { OnResponseEventData } from '../typings/context';
-import INTERNAL_HEADERS from './internal-header-names';
+import { OnResponseEventData, RequestCacheEntry } from '../typings/context';
 import Charset from '../processing/encoding/charset';
 import * as urlUtils from '../utils/url';
 import * as contentTypeUtils from '../utils/content-type';
 import generateUniqueId from '../utils/generate-unique-id';
-import { check as checkSameOriginPolicy } from './xhr/same-origin-policy';
+import { check as checkSameOriginPolicy } from './same-origin-policy';
 import * as headerTransforms from './header-transforms';
 import { RequestInfo } from '../session/events/info';
 import SERVICE_ROUTES from '../proxy/service-routes';
 import BUILTIN_HEADERS from './builtin-header-names';
-import SAME_ORIGIN_CHECK_FAILED_STATUS_CODE from './xhr/same-origin-check-failed-status-code';
-import { processSetCookieHeader } from './header-transforms/transforms';
 import logger from '../utils/logger';
+import { Credentials } from '../utils/url';
+import createSpecialPageResponse from './create-special-page-response';
+import { fetchBody } from '../utils/http';
+import * as requestCache from './cache';
 
 interface DestInfo {
     url: string;
@@ -38,11 +39,14 @@ interface DestInfo {
     isEventSource: boolean;
     isHtmlImport: boolean;
     isWebSocket: boolean;
+    isServiceWorker: boolean;
+    isAjax: boolean;
     charset: string;
     reqOrigin: string;
     referer?: string;
     domain?: string;
     auth?: string;
+    credentials?: urlUtils.Credentials;
 }
 
 interface ContentInfo {
@@ -69,23 +73,20 @@ const REDIRECT_STATUS_CODES                  = [301, 302, 303, 307, 308];
 const CANNOT_BE_USED_WITH_WEB_SOCKET_ERR_MSG = 'The function cannot be used with a WebSocket request.';
 
 export default class RequestPipelineContext {
-    readonly serverInfo: ServerInfo;
-    readonly req: http.IncomingMessage;
-    readonly res: http.ServerResponse | net.Socket;
     session: Session = null;
     reqBody: Buffer = null;
     dest: DestInfo = null;
-    destRes: http.IncomingMessage | FileStream | IncomingMessageMock = null;
+    destRes: http.IncomingMessage | FileStream | IncomingMessageLike = null;
     isDestResReadableEnded = false;
     destResBody: Buffer = null;
-    isAjax: boolean = false;
-    isPage: boolean = false;
-    isHTMLPage: boolean = false;
-    isHtmlImport: boolean = false;
-    isWebSocket: boolean = false;
-    isIframe: boolean = false;
-    isSpecialPage: boolean = false;
-    isWebSocketConnectionReset: boolean = false;
+    isAjax = false;
+    isPage = false;
+    isHTMLPage = false;
+    isHtmlImport = false;
+    isWebSocket = false;
+    isIframe = false;
+    isSpecialPage = false;
+    isWebSocketConnectionReset = false;
     contentInfo: ContentInfo = null;
     restoringStorages: StoragesSnapshot = null;
     requestId: string = generateUniqueId();
@@ -95,21 +96,15 @@ export default class RequestPipelineContext {
     parsedClientSyncCookie: ParsedClientSyncCookie;
     isFileProtocol: boolean;
     nonProcessedDestResBody: Buffer = null;
-    goToNextStage: boolean = true;
+    goToNextStage = true;
     mock: ResponseMock;
-    isSameOriginPolicyFailed: boolean = false;
+    isSameOriginPolicyFailed = false;
     windowId?: string;
+    temporaryCacheEntry?: RequestCacheEntry;
 
-    constructor (req: http.IncomingMessage, res: http.ServerResponse | net.Socket, serverInfo: ServerInfo) {
-        this.serverInfo = serverInfo;
-        this.req = req;
-        this.res = res;
-
-        const acceptHeader = req.headers[BUILTIN_HEADERS.accept] as string;
-
-        this.isAjax = typeof req.headers[INTERNAL_HEADERS.credentials] === 'string';
-        this.isPage  = !this.isAjax && !!acceptHeader && contentTypeUtils.isPage(acceptHeader);
-
+    constructor (readonly req: http.IncomingMessage,
+        readonly res: http.ServerResponse | net.Socket,
+        readonly serverInfo: ServerInfo) {
         this.parsedClientSyncCookie = req.headers.cookie && parseClientSyncCookieStr(req.headers.cookie);
     }
 
@@ -120,21 +115,24 @@ export default class RequestPipelineContext {
 
         const parsedResourceType = urlUtils.parseResourceType(parsed.resourceType);
         const dest               = {
-            url:           parsed.destUrl,
-            protocol:      parsed.destResourceInfo.protocol,
-            host:          parsed.destResourceInfo.host,
-            hostname:      parsed.destResourceInfo.hostname,
-            port:          parsed.destResourceInfo.port,
-            partAfterHost: parsed.destResourceInfo.partAfterHost,
-            auth:          parsed.destResourceInfo.auth,
-            isIframe:      parsedResourceType.isIframe,
-            isForm:        parsedResourceType.isForm,
-            isScript:      parsedResourceType.isScript,
-            isEventSource: parsedResourceType.isEventSource,
-            isHtmlImport:  parsedResourceType.isHtmlImport,
-            isWebSocket:   parsedResourceType.isWebSocket,
-            charset:       parsed.charset,
-            reqOrigin:     parsed.reqOrigin
+            url:             parsed.destUrl,
+            protocol:        parsed.destResourceInfo.protocol,
+            host:            parsed.destResourceInfo.host,
+            hostname:        parsed.destResourceInfo.hostname,
+            port:            parsed.destResourceInfo.port,
+            partAfterHost:   parsed.destResourceInfo.partAfterHost,
+            auth:            parsed.destResourceInfo.auth,
+            isIframe:        !!parsedResourceType.isIframe,
+            isForm:          !!parsedResourceType.isForm,
+            isScript:        !!(parsedResourceType.isScript || parsedResourceType.isServiceWorker),
+            isEventSource:   !!parsedResourceType.isEventSource,
+            isHtmlImport:    !!parsedResourceType.isHtmlImport,
+            isWebSocket:     !!parsedResourceType.isWebSocket,
+            isServiceWorker: !!parsedResourceType.isServiceWorker,
+            isAjax:          !!parsedResourceType.isAjax,
+            charset:         parsed.charset,
+            reqOrigin:       parsed.reqOrigin,
+            credentials:     parsed.credentials
         };
 
         return { dest, sessionId: parsed.sessionId, windowId: parsed.windowId };
@@ -157,6 +155,7 @@ export default class RequestPipelineContext {
 
         this.isWebSocket    = this.dest.isWebSocket;
         this.isHtmlImport   = this.dest.isHtmlImport;
+        this.isAjax         = this.dest.isAjax;
         this.isPage         = !this.isAjax && !this.isWebSocket && acceptHeader &&
                               contentTypeUtils.isPage(acceptHeader) || this.isHtmlImport;
         this.isIframe       = this.dest.isIframe;
@@ -172,6 +171,13 @@ export default class RequestPipelineContext {
         dest.url           = urlUtils.formatUrl(dest);
 
         return { dest, sessionId: parsedReferer.sessionId, windowId: parsedReferer.windowId };
+    }
+
+    private _addTemporaryEntryToCache (): void {
+        this.temporaryCacheEntry.value.res.setBody(this.destResBody);
+        requestCache.add(this.temporaryCacheEntry);
+
+        this.temporaryCacheEntry = void 0;
     }
 
     // API
@@ -203,12 +209,10 @@ export default class RequestPipelineContext {
 
         if (flattenParsedReferer) {
             this.dest.referer   = flattenParsedReferer.dest.url;
-            this.dest.reqOrigin = flattenParsedReferer.dest.protocol === 'file:'
-                ? flattenParsedReferer.dest.url
-                : urlUtils.getDomain(flattenParsedReferer.dest);
+            this.dest.reqOrigin = this.dest.reqOrigin || urlUtils.getDomain(flattenParsedReferer.dest);
         }
-        else if (this.req.headers[INTERNAL_HEADERS.origin])
-            this.dest.reqOrigin = this.req.headers[INTERNAL_HEADERS.origin] as string;
+        else
+            this.dest.reqOrigin = this.dest.reqOrigin || this.dest.domain;
 
         this._initRequestNatureInfo();
         this._applyClientSyncCookie();
@@ -233,7 +237,7 @@ export default class RequestPipelineContext {
         return (str[0] === '/' ? '' : '/') + str;
     }
 
-    buildContentInfo () {
+    buildContentInfo (): void {
         const contentType = this.destRes.headers[BUILTIN_HEADERS.contentType] as string || '';
         const accept      = this.req.headers[BUILTIN_HEADERS.accept] as string || '';
         const encoding    = (this.destRes.headers[BUILTIN_HEADERS.contentEncoding] as string || '').toLowerCase();
@@ -261,8 +265,9 @@ export default class RequestPipelineContext {
         let charset               = null;
         const contentTypeUrlToken = urlUtils.getResourceTypeString({
             isIframe: this.isIframe,
-            isForm:   isForm,
-            isScript: isScript
+            isAjax:   this.isAjax,
+
+            isForm, isScript
         });
 
         // NOTE: We need charset information if we are going to process the resource.
@@ -290,7 +295,7 @@ export default class RequestPipelineContext {
             isRedirect
         };
 
-        logger.proxy('Proxy resource content info %s %i', this.requestId, this);
+        logger.proxy.onContentInfoBuilt(this);
     }
 
     private _getInjectableUserScripts () {
@@ -299,6 +304,23 @@ export default class RequestPipelineContext {
         return this.session.injectable.userScripts
             .filter(userScript => userScript.page.match(requestInfo))
             .map(userScript => userScript.url);
+    }
+
+    private async _getDestResBody (res: IncomingMessageLike | http.IncomingMessage | FileStream): Promise<Buffer> {
+        if (IncomingMessageLike.isIncomingMessageLike(res))
+            return res.getBody();
+
+        return fetchBody(this.destRes);
+    }
+
+    calculateIsDestResReadableEnded (): void {
+        if (!this.contentInfo.isNotModified && !this.contentInfo.isRedirect) {
+            this.destRes.once('end', () => {
+                this.isDestResReadableEnded = true;
+            });
+        }
+        else
+            this.isDestResReadableEnded = true;
     }
 
     getInjectableScripts (): string[] {
@@ -328,13 +350,6 @@ export default class RequestPipelineContext {
     }
 
     closeWithError (statusCode: number, resBody: string | Buffer = ''): void {
-        if (statusCode === SAME_ORIGIN_CHECK_FAILED_STATUS_CODE) {
-            const processedCookie = processSetCookieHeader(this.destRes.headers[BUILTIN_HEADERS.setCookie], this);
-
-            if (processedCookie && processedCookie.length)
-                (this.res as http.ServerResponse).setHeader(BUILTIN_HEADERS.setCookie, processedCookie);
-        }
-
         if ('setHeader' in this.res && !this.res.headersSent) {
             this.res.statusCode = statusCode;
             this.res.setHeader(BUILTIN_HEADERS.contentType, 'text/html');
@@ -346,7 +361,7 @@ export default class RequestPipelineContext {
         this.goToNextStage = false;
     }
 
-    toProxyUrl (url: string, isCrossDomain: boolean, resourceType: string, charset?: string): string {
+    toProxyUrl (url: string, isCrossDomain: boolean, resourceType: string, charset?: string, reqOrigin?: string, credentials?: Credentials): string {
         const proxyHostname = this.serverInfo.hostname;
         const proxyProtocol = this.serverInfo.protocol;
         const proxyPort     = isCrossDomain ? this.serverInfo.crossDomainPort.toString() : this.serverInfo.port.toString();
@@ -360,7 +375,17 @@ export default class RequestPipelineContext {
             sessionId,
             resourceType,
             charset,
-            windowId
+            windowId,
+            reqOrigin,
+            credentials
+        });
+    }
+
+    getProxyOrigin(isCrossDomain = false) {
+        return urlUtils.getDomain({
+            protocol: this.serverInfo.protocol,
+            hostname: this.serverInfo.hostname,
+            port:     isCrossDomain ? this.serverInfo.crossDomainPort : this.serverInfo.port
         });
     }
 
@@ -381,21 +406,23 @@ export default class RequestPipelineContext {
         const headers = headerTransforms.forResponse(this);
         const res     = this.res as http.ServerResponse;
 
-        if (this.isHTMLPage && this.session.disablePageCaching)
+        if (this.isHTMLPage && this.session.options.disablePageCaching)
             headerTransforms.setupPreventCachingHeaders(headers);
 
-        logger.proxy('Proxy response %s %d %j', this.requestId, this.destRes.statusCode, headers);
+        logger.proxy.onResponse(this, headers);
 
         res.writeHead(this.destRes.statusCode as number, headers);
         res.addTrailers(this.destRes.trailers as http.OutgoingHttpHeaders);
     }
 
     async mockResponse (): Promise<void> {
-        logger.destination('Destination request is mocked %s %s %j', this.requestId, this.mock.statusCode, this.mock.headers);
+        logger.destination.onMockedRequest(this);
 
         this.mock.setRequestOptions(this.reqOpts);
 
         this.destRes = await this.mock.getResponse();
+
+        this.buildContentInfo();
     }
 
     setupMockIfNecessary (rule: RequestFilterRule): void {
@@ -411,5 +438,41 @@ export default class RequestPipelineContext {
 
     resolveInjectableUrl (url: string): string {
         return this.serverInfo.domain + url;
+    }
+
+    respondForSpecialPage (): void {
+        this.destRes = createSpecialPageResponse();
+
+        this.buildContentInfo();
+    }
+
+    async fetchDestResBody (): Promise<void> {
+        this.destResBody = await this._getDestResBody(this.destRes);
+
+        if (!this.temporaryCacheEntry)
+            return;
+
+        this._addTemporaryEntryToCache();
+    }
+
+    async pipeNonProcessedResponse (): Promise<void> {
+        if (!this.serverInfo.cacheRequests) {
+            this.destRes.pipe(this.res);
+
+            return;
+        }
+
+        this.destResBody = await this._getDestResBody(this.destRes);
+
+        if (this.temporaryCacheEntry)
+            this._addTemporaryEntryToCache();
+
+        this.res.write(this.destResBody);
+        this.res.end();
+    }
+
+    createCacheEntry (res: http.IncomingMessage | IncomingMessageLike | FileStream): void {
+        if (requestCache.shouldCache(this) && !IncomingMessageLike.isIncomingMessageLike(res))
+            this.temporaryCacheEntry = requestCache.create(this.reqOpts, res);
     }
 }

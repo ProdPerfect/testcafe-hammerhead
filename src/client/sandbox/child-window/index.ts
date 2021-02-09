@@ -13,6 +13,7 @@ import isKeywordTarget from '../../../utils/is-keyword-target';
 import Listeners from '../event/listeners';
 import INTERNAL_PROPS from '../../../processing/dom/internal-properties';
 import getTopOpenerWindow from '../../utils/get-top-opener-window';
+import { isIframeWindow } from '../../utils/dom';
 
 const DEFAULT_WINDOW_PARAMETERS = 'width=500px, height=500px';
 const STORE_CHILD_WINDOW_CMD    = 'hammerhead|command|store-child-window';
@@ -24,6 +25,12 @@ export default class ChildWindowSandbox extends SandboxBase {
     constructor (private readonly _messageSandbox: MessageSandbox,
         private readonly _listeners: Listeners) {
         super();
+    }
+
+    private static _shouldOpenInNewWindowOnElementAction (el: HTMLLinkElement | HTMLAreaElement | HTMLFormElement, defaultTarget: string): boolean {
+        const target = this._calculateTargetForElement(el);
+
+        return this._shouldOpenInNewWindow(target, defaultTarget);
     }
 
     private static _shouldOpenInNewWindow (target: string, defaultTarget: string): boolean {
@@ -42,7 +49,7 @@ export default class ChildWindowSandbox extends SandboxBase {
         windowParams = windowParams || DEFAULT_WINDOW_PARAMETERS;
         windowName   = windowName || windowId;
 
-        const newPageUrl = urlUtils.getPageProxyUrl(url, windowId);
+        const newPageUrl   = urlUtils.getPageProxyUrl(url, windowId);
         const targetWindow = window || this.window;
         const openedWindow = nativeMethods.windowOpen.call(targetWindow, newPageUrl, windowName, windowParams);
 
@@ -53,26 +60,34 @@ export default class ChildWindowSandbox extends SandboxBase {
         return { windowId, wnd: openedWindow };
     }
 
+    private static _calculateTargetForElement (el: HTMLLinkElement | HTMLAreaElement | HTMLFormElement): string {
+        const base = nativeMethods.querySelector.call(domUtils.findDocument(el), 'base');
+
+        return el.target || base?.target;
+    }
+
     handleClickOnLinkOrArea(el: HTMLLinkElement | HTMLAreaElement): void {
         if (!settings.get().allowMultipleWindows)
             return;
 
         this._listeners.initElementListening(el, ['click']);
-        this._listeners.addInternalEventListener(el, ['click'], (_e, _dispatched, preventEvent, _cancelHandlers, stopEventPropagation) => {
-            if (!ChildWindowSandbox._shouldOpenInNewWindow(el.target, DefaultTarget.linkOrArea))
+        this._listeners.addInternalEventAfterListener(el, ['click'], e => {
+            if (e.defaultPrevented)
+                return;
+
+            if (!ChildWindowSandbox._shouldOpenInNewWindowOnElementAction(el, DefaultTarget.linkOrArea))
                 return;
 
             // TODO: need to check that specified 'area' are clickable (initiated new page opening)
             const url = nativeMethods.anchorHrefGetter.call(el);
 
-            this._openUrlInNewWindow(url);
+            e.preventDefault();
 
-            preventEvent();
-            stopEventPropagation();
+            this._openUrlInNewWindow(url);
         });
     }
 
-    handleWindowOpen (window: Window, args: any[]): Window {
+    handleWindowOpen (window: Window, args: [string?, string?, string?, boolean?]): Window {
         const [url, target, parameters] = args;
 
         if (settings.get().allowMultipleWindows && ChildWindowSandbox._shouldOpenInNewWindow(target, DefaultTarget.windowOpen)) {
@@ -89,13 +104,13 @@ export default class ChildWindowSandbox extends SandboxBase {
             return;
 
         this._listeners.initElementListening(window, ['submit']);
-        this._listeners.addInternalEventListener(window, ['submit'], e => {
+        this._listeners.addInternalEventBeforeListener(window, ['submit'], e => {
             if (!domUtils.isFormElement(e.target))
                 return;
 
             const form = e.target;
 
-            if (!ChildWindowSandbox._shouldOpenInNewWindow(form.target, DefaultTarget.form))
+            if (!ChildWindowSandbox._shouldOpenInNewWindowOnElementAction(form, DefaultTarget.form))
                 return;
 
             const aboutBlankUrl = urlUtils.getProxyUrl(SPECIAL_BLANK_PAGE);
@@ -124,7 +139,7 @@ export default class ChildWindowSandbox extends SandboxBase {
     }
 
     private _setupChildWindowCollecting (window: Window) {
-        if (window !== window.top)
+        if (isIframeWindow(window))
             return;
 
         const topOpenerWindow = getTopOpenerWindow();

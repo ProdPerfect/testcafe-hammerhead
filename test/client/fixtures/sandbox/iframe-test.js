@@ -1,4 +1,7 @@
-var settings = hammerhead.get('./settings');
+var settings     = hammerhead.settings;
+var overriding   = hammerhead.get('./utils/overriding');
+var DomProcessor = hammerhead.get('../processing/dom');
+var htmlUtils    = hammerhead.utils.html;
 
 var iframeSandbox = hammerhead.sandbox.iframe;
 var cookieSandbox = hammerhead.sandbox.cookie;
@@ -6,6 +9,7 @@ var browserUtils  = hammerhead.utils.browser;
 var domUtils      = hammerhead.utils.dom;
 var shadowUI      = hammerhead.sandbox.shadowUI;
 var Promise       = hammerhead.Promise;
+var nativeMethods = hammerhead.nativeMethods;
 
 test('should not miss the Hammerhead instance after the iframe.contentDocument.close function calling (GH-1821)', function () {
     function checkIframe (iframe) {
@@ -77,6 +81,92 @@ test('document.write', function () {
     iframe.parentNode.removeChild(iframe);
 });
 
+if (nativeMethods.iframeSrcdocGetter) {
+    module('srcdoc');
+
+    test('process html with iframe with srcdoc', function () {
+        document.body.insertAdjacentHTML('beforeend', '<iframe id="test' + Date.now() + '" srcdoc="' +
+            '<a href=\'http://domain.com/\'>Link</a><script>document.write(location.href)<' + '/script>"></iframe>');
+
+        var iframe = document.body.lastChild;
+
+        return window.QUnitGlobals.wait(function () {
+            return true;
+        })
+            .then(function () {
+                return window.QUnitGlobals.waitForIframe(iframe);
+            })
+            .then(function () {
+                var anchor = iframe.contentDocument.querySelector('a');
+
+                strictEqual(nativeMethods.anchorHrefGetter.call(anchor), 'http://' + location.host + '/sessionId!i/http://domain.com/');
+                strictEqual(nativeMethods.getAttribute.call(anchor, DomProcessor.getStoredAttrName('href')), 'http://domain.com/');
+                strictEqual(anchor.href, 'http://domain.com/');
+                strictEqual(anchor.getAttribute('href'), 'http://domain.com/');
+
+                iframe.contentDocument.body.removeChild(anchor);
+
+                strictEqual(iframe.contentDocument.body.lastChild.textContent, 'https://example.com/');
+
+                document.body.removeChild(iframe);
+            });
+    });
+
+    test('the srcdoc property', function () {
+        var iframe = document.createElement('iframe');
+        var html   = '<body><script>document.write(location.href)<' + '/script>';
+
+        iframe.srcdoc = html;
+        iframe.id     = 'test' + Date.now();
+
+        document.body.appendChild(iframe);
+
+        return window.QUnitGlobals.wait(function () {
+            return true;
+        })
+            .then(function () {
+                return window.QUnitGlobals.waitForIframe(iframe);
+            })
+            .then(function () {
+                strictEqual(iframe.srcdoc, html);
+                ok(nativeMethods.iframeSrcdocGetter.call(iframe).indexOf('__get$Loc') > -1);
+                strictEqual(iframe.contentDocument.body.lastChild.textContent, 'https://example.com/');
+
+                document.body.removeChild(iframe);
+            });
+    });
+
+    test('the srcdoc attribute', function () {
+        var iframe = document.createElement('iframe');
+        var html   = '<a href="123"></a>';
+
+        iframe.setAttribute('srcdoc', html);
+
+        strictEqual(iframe.getAttribute('srcdoc'), html);
+        strictEqual(nativeMethods.getAttribute.call(iframe, 'srcdoc'), htmlUtils.processHtml(html, { isPage: true }).replace(/(sessionId)/, '$1!i'));
+    });
+}
+
+test('should not call the contentWindow getter while cloning iframe/frame from XMLDocument (GH-2554)', function () {
+    expect(0);
+
+    var str = '<document><iframe /><frame /></document>';
+
+    var parser      = new DOMParser();
+    var xmlDocument = parser.parseFromString(str, 'text/xml');
+    var iframe      = xmlDocument.childNodes[0].childNodes[0];
+    var frame       = xmlDocument.childNodes[0].childNodes[1];
+
+    try {
+        // NOTE: in this case we have the "Element" iframe/frame prototype that doesn't have the contentWindow getter.
+        iframe.cloneNode(true);
+        frame.cloneNode(true);
+    }
+    catch (e) {
+        ok(false, e);
+    }
+});
+
 module('regression');
 
 test('take sequences starting with "$" into account when generating task scripts (GH-389)', function () {
@@ -140,16 +230,14 @@ test('the AMD module loader disturbs proxying an iframe without src (GH-127)', f
 test('native methods are properly initialized in an iframe without src (GH-279)', function () {
     return createTestIframe()
         .then(function (iframe) {
-            var iframeDocument         = iframe.contentDocument;
-            var iframeWindow           = iframe.contentWindow;
-            var iframeHammerhead       = iframeWindow['%hammerhead%'];
-            var nativeCreateElement    = iframeHammerhead.sandbox.nativeMethods.createElement.toString();
-            var nativeAppendChild      = iframeHammerhead.sandbox.nativeMethods.appendChild.toString();
-            var overridedCreateElement = iframeDocument.createElement.toString();
-            var overridedAppendChild   = iframeDocument.createElement('div').appendChild.toString();
+            var iframeDocument          = iframe.contentDocument;
+            var iframeWindow            = iframe.contentWindow;
+            var iframeHammerhead        = iframeWindow['%hammerhead%'];
+            var overriddenCreateElement = iframeDocument.createElement;
+            var overriddenAppendChild   = iframeDocument.createElement('div').appendChild;
 
-            ok(nativeCreateElement !== overridedCreateElement);
-            ok(nativeAppendChild !== overridedAppendChild);
+            ok(!overriding.isNativeFunction(overriddenCreateElement));
+            ok(!overriding.isNativeFunction(overriddenAppendChild));
 
             var nativeImage     = new iframeHammerhead.sandbox.nativeMethods.Image(10, 10);
             var overridedImage  = new iframeWindow.Image(10, 10);
@@ -170,7 +258,7 @@ test('quotes in the cookies are not escaped when a task script for an iframe is 
 
     return createTestIframe()
         .then(function (iframe) {
-            strictEqual(iframe.contentWindow['%hammerhead%'].get('./settings').get().cookie, cookie);
+            strictEqual(iframe.contentWindow['%hammerhead%'].settings.get().cookie, cookie);
         });
 });
 
@@ -333,7 +421,7 @@ if (browserUtils.isWebKit) {
         return createTestIframe({ src: getSameDomainPageUrl('../../data/iframe/window-event-listeners.html') })
             .then(function (iframe) {
                 iframe.contentWindow.performWrite();
-                iframe.contentWindow['%hammerhead%'].eventSandbox.listeners.addInternalEventListener(iframe.contentWindow, ['click'], function () {
+                iframe.contentWindow['%hammerhead%'].eventSandbox.listeners.addInternalEventBeforeListener(iframe.contentWindow, ['click'], function () {
                     ++internalClickEventCounter;
                 });
 
@@ -505,5 +593,24 @@ test('a self-removing script should not stop the parsing stream (GH-2000)', func
 
             strictEqual(iframeDoc.querySelector('#mountPoint'),
                 browserUtils.isChrome || browserUtils.isSafari ? null : iframeDoc.body.children[1]);
+        });
+});
+
+test('the internal anchor element should be restored after the reusing hammerhead in iframe (GH-2461)', function () {
+    var iframe;
+
+    return createTestIframe({ src: 'javascript:"<p></p>"' })
+        .then(function (createdIframe) {
+            iframe = createdIframe;
+            iframe.src = getSameDomainPageUrl('../../data/iframe/simple-iframe.html');
+
+            return window.QUnitGlobals.waitForIframe(iframe);
+        })
+        .then(function () {
+            var anchor = iframe.contentDocument.createElement('a');
+
+            anchor.href = 'http://example.com/';
+
+            strictEqual(anchor.hostname, 'example.com');
         });
 });

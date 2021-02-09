@@ -1,6 +1,6 @@
 var DomProcessor    = hammerhead.get('../processing/dom');
-var destLocation    = hammerhead.get('./utils/destination-location');
-var urlUtils        = hammerhead.get('./utils/url');
+var destLocation    = hammerhead.utils.destLocation;
+var urlUtils        = hammerhead.utils.url;
 var FileListWrapper = hammerhead.get('./sandbox/upload/file-list-wrapper');
 var INTERNAL_ATTRS  = hammerhead.get('../processing/dom/internal-attributes');
 var Promise         = hammerhead.Promise;
@@ -533,12 +533,11 @@ if (window.WebSocket) {
 
     test('checking parameters', function () {
         var nativeWebSocket  = nativeMethods.WebSocket;
-        var originHeader     = encodeURIComponent(destLocation.getOriginHeader());
         var addEventListener = function () {
         };
 
         nativeMethods.WebSocket = function (url) {
-            strictEqual(url, 'ws://' + location.host + '/sessionId!w!' + originHeader + '/http://localhost/socket');
+            strictEqual(url, 'ws://' + location.host + '/sessionId!w!s*example.com/http://localhost/socket');
         };
 
         nativeMethods.WebSocket.prototype.addEventListener = addEventListener;
@@ -547,8 +546,7 @@ if (window.WebSocket) {
         new WebSocket('ws://localhost/socket');
 
         nativeMethods.WebSocket = function (url) {
-            strictEqual(url, 'ws://' + location.host + '/sessionId!w!' + originHeader +
-                             '/https://localhost/secure-socket');
+            strictEqual(url, 'ws://' + location.host + '/sessionId!w!s*example.com/https://localhost/secure-socket');
         };
 
         nativeMethods.WebSocket.prototype.addEventListener = addEventListener;
@@ -558,8 +556,7 @@ if (window.WebSocket) {
 
         nativeMethods.WebSocket = function (url) {
             strictEqual(arguments.length, 3);
-            strictEqual(url, 'ws://' + location.host + '/sessionId!w!' + originHeader +
-                             '/https://localhost/secure-socket');
+            strictEqual(url, 'ws://' + location.host + '/sessionId!w!s*example.com/https://localhost/secure-socket');
         };
 
         nativeMethods.WebSocket.prototype.addEventListener = addEventListener;

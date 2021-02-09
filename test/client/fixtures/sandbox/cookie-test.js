@@ -1,13 +1,16 @@
 // NOTE: You should clear a browser's cookie if tests are fail,
 // because document.cookie can contains cookie from another sites which was run through playground
-var sharedCookieUtils = hammerhead.get('../utils/cookie');
-var settings          = hammerhead.get('./settings');
-var urlUtils          = hammerhead.get('./utils/url');
-var destLocation      = hammerhead.get('./utils/destination-location');
+var sharedCookieUtils = hammerhead.sharedUtils.cookie;
+var settings          = hammerhead.settings;
+var urlUtils          = hammerhead.utils.url;
+var destLocation      = hammerhead.utils.destLocation;
 
 var nativeMethods = hammerhead.nativeMethods;
 var browserUtils  = hammerhead.utils.browser;
 var Promise       = hammerhead.Promise;
+
+var validDate    = new Date((Math.floor(Date.now() / 1000) + 60) * 1000);
+var validDateStr = validDate.toUTCString();
 
 QUnit.testDone(function () {
     nativeMethods.documentCookieGetter.call(document)
@@ -37,28 +40,28 @@ test('get/set', function () {
     }
 
     testCookies(storedForcedLocation, [
-        'Test1=Basic; expires=Wed, 13-Jan-2021 22:23:01 GMT',
-        'Test2=PathMatch; expires=Wed, 13-Jan-2021 22:23:01 GMT; path=/',
-        'Test4=DomainMatch; expires=Wed, 13-Jan-2021 22:23:01 GMT; domain=.example.com',
-        'Test5=DomainNotMatch; expires=Wed, 13-Jan-2021 22:23:01 GMT; domain=.cbf4e2d79.com',
-        'Test6=HttpOnly; expires=Wed, 13-Jan-2021 22:23:01 GMT; path=/; HttpOnly',
-        'Test7=Secure; expires=Wed, 13-Jan-2021 22:23:01 GMT; path=/; Secure',
+        'Test1=Basic; expires=' + validDateStr,
+        'Test2=PathMatch; expires=' + validDateStr + '; path=/',
+        'Test4=DomainMatch; expires=' + validDateStr + '; domain=.example.com',
+        'Test5=DomainNotMatch; expires=' + validDateStr + '; domain=.cbf4e2d79.com',
+        'Test6=HttpOnly; expires=' + validDateStr + '; path=/; HttpOnly',
+        'Test7=Secure; expires=' + validDateStr + '; path=/; Secure',
         'Test8=Expired; expires=Wed, 13-Jan-1977 22:23:01 GMT; path=/',
-        'Test9=Duplicate; One=More; expires=Wed, 13-Jan-2021 22:23:01 GMT; path=/',
+        'Test9=Duplicate; One=More; expires=' + validDateStr + '; path=/',
         'Test10=' + new Array(350).join('(big cookie)'),
         'value without key'
     ], 'Test1=Basic; Test2=PathMatch; Test4=DomainMatch; Test7=Secure; Test9=Duplicate; value without key');
 
     testCookies('http://localhost', [
-        'Test1=DomainMatch; expires=Wed, 13-Jan-2021 22:23:01 GMT; domain=localhost',
-        'Test2=DomainNotMatch; expires=Wed, 13-Jan-2021 22:23:01 GMT; domain=localhost:80',
-        'Test2=DomainNotMatch; expires=Wed, 13-Jan-2021 22:23:01 GMT; domain=127.0.0.1',
+        'Test1=DomainMatch; expires=' + validDateStr + '; domain=localhost',
+        'Test2=DomainNotMatch; expires=' + validDateStr + '; domain=localhost:80',
+        'Test2=DomainNotMatch; expires=' + validDateStr + '; domain=127.0.0.1',
     ], 'Test1=DomainMatch');
 
     testCookies('http://127.0.0.1', [
-        'Test1=DomainMatch; expires=Wed, 13-Jan-2021 22:23:01 GMT; domain=127.0.0.1',
-        'Test2=DomainNotMatch; expires=Wed, 13-Jan-2021 22:23:01 GMT; domain=127.0.0.1:80',
-        'Test2=DomainNotMatch; expires=Wed, 13-Jan-2021 22:23:01 GMT; domain=localhost',
+        'Test1=DomainMatch; expires=' + validDateStr + '; domain=127.0.0.1',
+        'Test2=DomainNotMatch; expires=' + validDateStr + '; domain=127.0.0.1:80',
+        'Test2=DomainNotMatch; expires=' + validDateStr + '; domain=localhost',
     ], 'Test1=DomainMatch');
 
     testCookies('http://sub.example.com/', [
@@ -280,8 +283,8 @@ test('same-domain frames', function () {
             function checkCookies (expectedCookies) {
                 strictEqual(nativeMethods.documentCookieGetter.call(document), '');
                 strictEqual(settings.get().cookie, expectedCookies);
-                strictEqual(iframe.contentWindow['%hammerhead%'].get('./settings').get().cookie, expectedCookies);
-                strictEqual(embeddedIframe.contentWindow['%hammerhead%'].get('./settings').get().cookie, expectedCookies);
+                strictEqual(iframe.contentWindow['%hammerhead%'].settings.get().cookie, expectedCookies);
+                strictEqual(embeddedIframe.contentWindow['%hammerhead%'].settings.get().cookie, expectedCookies);
             }
 
             checkCookies('');
@@ -345,7 +348,7 @@ test('cross-domain frames', function () {
             nativeMethods.documentCookieSetter.call(document, 's|sessionId|test|example.com|%2F||1fckm5lnl=123;path=/');
 
             strictEqual(settings.get().cookie, '');
-            strictEqual(iframes[1].contentWindow['%hammerhead%'].get('./settings').get().cookie, '');
+            strictEqual(iframes[1].contentWindow['%hammerhead%'].settings.get().cookie, '');
 
             return Promise.all([
                 checkCrossDomainIframeCookie(iframes[0], ''),
@@ -358,7 +361,7 @@ test('cross-domain frames', function () {
             expectedCookies = 'cafe=321; test=123';
 
             strictEqual(settings.get().cookie, expectedCookies);
-            strictEqual(iframes[1].contentWindow['%hammerhead%'].get('./settings').get().cookie, expectedCookies);
+            strictEqual(iframes[1].contentWindow['%hammerhead%'].settings.get().cookie, expectedCookies);
 
             return window.QUnitGlobals.wait(realCookieIsEmpty, 5000);
         })
@@ -376,7 +379,7 @@ test('cross-domain frames', function () {
         })
         .then(function () {
             strictEqual(settings.get().cookie, 'test=123; set=cookie');
-            strictEqual(iframes[1].contentWindow['%hammerhead%'].get('./settings').get().cookie, 'test=123; set=cookie');
+            strictEqual(iframes[1].contentWindow['%hammerhead%'].settings.get().cookie, 'test=123; set=cookie');
 
             return Promise.all([
                 checkCrossDomainIframeCookie(iframes[0], 'test=123; set=cookie'),

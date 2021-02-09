@@ -27,7 +27,7 @@ export default class Selection {
         const listeners      = this.listeners;
         const timersSandbox  = this.timersSandbox;
 
-        this.setSelectionRangeWrapper = function () {
+        this.setSelectionRangeWrapper = function (this: HTMLInputElement | HTMLTextAreaElement) {
             const selectionStart     = arguments[0];
             const selectionEnd       = arguments[1];
             const selectionDirection = arguments[2] || 'none';
@@ -45,7 +45,7 @@ export default class Selection {
                 let res;
 
                 if (useInternalSelection)
-                    el.type = 'text';
+                    el.setAttribute('type', 'text');
 
                 // NOTE: In MSEdge, an error occurs when the setSelectionRange method is called for an input with
                 // 'display = none' and selectionStart !== selectionEnd in other IEs, the error doesn't occur, but
@@ -64,7 +64,7 @@ export default class Selection {
                         selectionDirection: el.selectionDirection
                     };
 
-                    el.type = savedType;
+                    el.setAttribute('type', savedType);
                     // HACK: (A problem with input type = 'number' after Chrome is updated to v.33.0.1750.117 and
                     // in Firefox 29.0.  T101195) To set right selection: if the input type is 'number' or 'email',
                     // we need to change the type to text, and then restore it after setting selection.(B254340).
@@ -101,7 +101,9 @@ export default class Selection {
             return selection.wrapSetterSelection(el, selectionSetter, needFocus);
         };
 
-        this.selectWrapper = function () {
+        this.selectWrapper = function (this: HTMLElement) {
+            // NOTE: Non-standard IE Only class TextRange
+            // @ts-ignore
             const element = this.parentElement();
 
             if (!element || domUtils.getActiveElement(domUtils.findDocument(element)) === element)
@@ -114,13 +116,13 @@ export default class Selection {
                     focusRaised = true;
             };
 
-            listeners.addInternalEventListener(document, ['focus'], focusHandler);
+            listeners.addInternalEventBeforeListener(document, ['focus'], focusHandler);
 
             result = nativeMethods.select.call(this);
 
             timersSandbox.setTimeout.call(window, () => {
                 timersSandbox.setTimeout.call(window, () => {
-                    listeners.removeInternalEventListener(document, ['focus'], focusHandler);
+                    listeners.removeInternalEventBeforeListener(document, ['focus'], focusHandler);
 
                     if (!focusRaised)
                         eventSimulator.focus(element);
@@ -166,7 +168,7 @@ export default class Selection {
         };
 
         if (needFocus)
-            this.listeners.addInternalEventListener(document, ['focus'], focusHandler);
+            this.listeners.addInternalEventBeforeListener(document, ['focus'], focusHandler);
 
         // The focus and blur events
         Listeners.beforeDispatchEvent(el);
@@ -192,7 +194,7 @@ export default class Selection {
             if (browserUtils.isIE11) {
                 this.timersSandbox.setTimeout.call(window, () => {
                     this.timersSandbox.setTimeout.call(window, () => {
-                        this.listeners.removeInternalEventListener(document, ['focus'], focusHandler);
+                        this.listeners.removeInternalEventBeforeListener(document, ['focus'], focusHandler);
 
                         if (!focusRaised)
                             this.eventSimulator.focus(el);
@@ -200,7 +202,7 @@ export default class Selection {
                 }, 0);
             }
             else {
-                this.listeners.removeInternalEventListener(document, ['focus'], focusHandler);
+                this.listeners.removeInternalEventBeforeListener(document, ['focus'], focusHandler);
 
                 if (!focusRaised) {
                     // NOTE: In Firefox, raising the dispatchEvent 'focus' doesn’t activate an element.

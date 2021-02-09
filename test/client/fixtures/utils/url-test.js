@@ -1,7 +1,7 @@
-var settings       = hammerhead.get('./settings');
-var urlUtils       = hammerhead.get('./utils/url');
-var sharedUrlUtils = hammerhead.get('../utils/url');
-var destLocation   = hammerhead.get('./utils/destination-location');
+var settings       = hammerhead.settings;
+var urlUtils       = hammerhead.utils.url;
+var sharedUrlUtils = hammerhead.sharedUtils.url;
+var destLocation   = hammerhead.utils.destLocation;
 
 var browserUtils  = hammerhead.utils.browser;
 var nativeMethods = hammerhead.nativeMethods;
@@ -156,6 +156,17 @@ test('auth', function () {
     strictEqual(urlUtils.parseUrl('http://username:password@example.com').auth, 'username:password');
     strictEqual(urlUtils.parseUrl('http://username@example.com').auth, 'username');
     strictEqual(urlUtils.parseUrl('http://example.com').auth, void 0);
+});
+
+test('scope', function () {
+    strictEqual(urlUtils.getScope('http://example.com'), '/');
+    strictEqual(urlUtils.getScope('http://example.com/'), '/');
+    strictEqual(urlUtils.getScope('http://example.com/img.gif'), '/');
+    strictEqual(urlUtils.getScope('http://example.com/path/to/ws.js'), '/path/to/');
+    strictEqual(urlUtils.getScope('http://example.com/path/?z=9'), '/path/');
+    strictEqual(urlUtils.getScope('http://example.com/path?z=9'), '/');
+    strictEqual(urlUtils.getScope('/path/?z=9'), '/path/');
+    strictEqual(urlUtils.getScope('../path/sw.js'), '/path/');
 });
 
 module('get proxy url');

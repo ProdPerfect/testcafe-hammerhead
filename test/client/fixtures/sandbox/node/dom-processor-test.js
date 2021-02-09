@@ -1,16 +1,18 @@
 var INTERNAL_ATTRS = hammerhead.get('../processing/dom/internal-attributes');
-var htmlUtils      = hammerhead.get('./utils/html');
+var htmlUtils      = hammerhead.utils.html;
 var DomProcessor   = hammerhead.get('../processing/dom');
 var domProcessor   = hammerhead.get('./dom-processor');
 var processScript  = hammerhead.get('../processing/script').processScript;
 var styleProcessor = hammerhead.get('../processing/style');
-var settings       = hammerhead.get('./settings');
-var urlUtils       = hammerhead.get('./utils/url');
-var sharedUrlUtils = hammerhead.get('../utils/url');
-var destLocation   = hammerhead.get('./utils/destination-location');
+var settings       = hammerhead.settings;
+var urlUtils       = hammerhead.utils.url;
+var sharedUrlUtils = hammerhead.sharedUtils.url;
+var destLocation   = hammerhead.utils.destLocation;
 var eventSimulator = hammerhead.sandbox.event.eventSimulator;
 
-var nativeMethods = hammerhead.nativeMethods;
+var nativeMethods  = hammerhead.nativeMethods;
+var elementSandbox = hammerhead.sandbox.node.element;
+var shadowUI       = hammerhead.sandbox.shadowUI;
 
 test('iframe', function () {
     var iframe         = nativeMethods.createElement.call(document, 'iframe');
@@ -82,6 +84,74 @@ test('anchor in iframe', function () {
     iframe.parentNode.removeChild(iframe);
     anchor.parentNode.removeChild(anchor);
 });
+
+if (nativeMethods.append) {
+    test('Element.prototype.append', function () {
+        var div  = document.createElement('div');
+        var root = shadowUI.getRoot();
+
+        document.body.append(div);
+
+        strictEqual(nativeMethods.nodeLastChildGetter.call(document.body), root);
+        strictEqual(nativeMethods.nodePrevSiblingGetter.call(root), div);
+
+        var isScriptElementAddedEventRaised = false;
+
+        elementSandbox.on(elementSandbox.SCRIPT_ELEMENT_ADDED_EVENT, function () {
+            isScriptElementAddedEventRaised = true;
+        });
+
+        div.append('text node', document.createTextNode('123'), document.createElement('script'));
+
+        ok(isScriptElementAddedEventRaised);
+
+        document.body.removeChild(div);
+
+        var text = 'foobar';
+        var span = document.createElement('span');
+        var p    = document.createElement('p');
+
+        document.body.append(text, span, p);
+
+        strictEqual(nativeMethods.nodeLastChildGetter.call(document.body), root);
+        strictEqual(nativeMethods.nodePrevSiblingGetter.call(root), p);
+        strictEqual(nativeMethods.nodePrevSiblingGetter.call(p), span);
+        strictEqual(nativeMethods.nodePrevSiblingGetter.call(span).data, text);
+
+        document.body.removeChild(span.previousSibling);
+        document.body.removeChild(span);
+        document.body.removeChild(p);
+
+        var onlyText = 'only text';
+
+        document.body.append(onlyText);
+
+        strictEqual(nativeMethods.nodeLastChildGetter.call(document.body), root);
+        strictEqual(nativeMethods.nodePrevSiblingGetter.call(root).data, onlyText);
+
+        document.body.removeChild(root.previousSibling);
+    });
+}
+
+if (nativeMethods.remove) {
+    test('Element.prototype.remove', function () {
+        var div = document.createElement('div');
+
+        document.body.appendChild(div);
+
+        var onElementRemovedCalled = false;
+
+        elementSandbox._onElementRemoved = function () {
+            onElementRemovedCalled = true;
+            delete elementSandbox._onElementRemoved;
+        };
+
+        div.remove();
+
+        ok(onElementRemovedCalled);
+        strictEqual(nativeMethods.nodeParentNodeGetter.call(div), null);
+    });
+}
 
 test('comment inside script', function () {
     var testScript = function (scriptText) {
@@ -619,6 +689,23 @@ test('script and style content added via a child text node must be overridden (G
     ok(script.childNodes[0].data.indexOf('var host1 =  __get$Loc(location) .host') > -1);
     script.insertBefore(scriptTextNode2, scriptTextNode1);
     ok(script.childNodes[0].data.indexOf('var host2 =  __get$Loc(location) .host') > -1);
+
+    if (!nativeMethods.append)
+        return;
+
+    style.append('div.class3 { background-image: url("/image3.png"); }',
+        'div.class4 { background-image: url("/image4.png"); }',
+        document.createTextNode('div.class5 { background-image: url("/image5.png"); }'));
+    ok(style.childNodes[2].data.indexOf(urlUtils.getProxyUrl('/image3.png')) > -1);
+    ok(style.childNodes[3].data.indexOf(urlUtils.getProxyUrl('/image4.png')) > -1);
+    ok(style.childNodes[4].data.indexOf(urlUtils.getProxyUrl('/image5.png')) > -1);
+
+    script.append('var port = location.port',
+        document.createTextNode('var hostname = location.hostname'),
+        'var protocol = location.protocol');
+    ok(script.childNodes[2].data.indexOf('var port =  __get$Loc(location) .port') > -1);
+    ok(script.childNodes[3].data.indexOf('var hostname =  __get$Loc(location) .hostname') > -1);
+    ok(script.childNodes[4].data.indexOf('var protocol =  __get$Loc(location) .protocol') > -1);
 });
 
 test('node.replaceChild must be overridden (GH-264)', function () {
